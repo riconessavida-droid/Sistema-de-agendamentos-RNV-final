@@ -1,0 +1,5 @@
+{
+  "name": "Consultoria Financeira - Gestão de Agendamentos",
+  "description": "Sistema de controle de agendamentos para consultoria financeira de 5 meses, com projeção automática de reuniões, lembretes de 7 dias e sinalização para o consultor na 5ª reunião.",
+  "requestFramePermissions": []
+}
