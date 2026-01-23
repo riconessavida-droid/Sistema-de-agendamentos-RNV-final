@@ -1,8 +1,8 @@
 
 import React from 'react';
 import { Bell, Calendar, ChevronRight } from 'lucide-react';
-import { Client, MeetingStatus } from '../types';
-import { getNextMonths } from '../constants';
+import { Client, MeetingStatus } from './types';
+import { getNextMonths } from './constants';
 
 interface RemindersPanelProps {
   clients: Client[];
