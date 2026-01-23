@@ -38,9 +38,9 @@ import {
   MEETING_LABEL_TEXTS,
   MONTH_NAMES
 } from './constants';
-import { ClientForm } from './components/ClientForm';
-import { RemindersPanel } from './components/RemindersPanel';
-import { Auth } from './components/Auth';
+import { ClientForm } from './ClientForm';
+import { RemindersPanel } from './RemindersPanel';
+import { Auth } from './Auth';
 
 const LOCAL_STORAGE_KEY = 'rnv_consulting_base_v1';
 const SESSION_KEY = 'rnv_current_session';
