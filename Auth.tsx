@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { User, UserRole } from '../types';
+import { User, UserRole } from './types';
 import { 
   TrendingUp, 
   Mail, 
