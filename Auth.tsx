@@ -20,7 +20,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  const [role, setRole] = useState<UserRole>(UserRole.ASSISTANT); // padrão ASSISTANT
+  const [role, setRole] = useState<UserRole>(UserRole.ASSISTANT); // Forçado para ASSISTANT
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -55,7 +55,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
         .insert({
           id: userId,
           name: fallbackName,
-          role: UserRole.ASSISTANT, // nunca cria ADMIN automaticamente
+          role: UserRole.ASSISTANT, // Nunca cria ADMIN automaticamente
           active: true
         });
 
@@ -125,7 +125,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
 
         if (error) {
           console.error('Erro Supabase signIn:', error);
-          setError(error.message); // mostra erro real
+          setError(error.message); // Mostra erro real
           return;
         }
 
@@ -147,22 +147,22 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
           options: {
             data: {
               name,
-              role: UserRole.ASSISTANT // força ASSISTANT sempre
+              role: UserRole.ASSISTANT // Força ASSISTANT sempre
             }
           }
         });
 
         if (error) {
           console.error('Erro Supabase signUp:', error);
-          setError(error.message); // mostra erro real
+          setError(error.message); // Mostra erro real
           return;
         }
 
         if (data.user && data.session) {
-          // sessão criada: entra direto
+          // Sessão criada: entra direto
           await loadUserProfile(data.user.id, data.user.email || email);
         } else {
-          // sem sessão (ex.: confirmação de e-mail ligada)
+          // Sem sessão (ex.: confirmação de e-mail ligada)
           setError('Conta criada. Verifique seu e-mail para confirmar e depois faça login.');
         }
       }
