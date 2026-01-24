@@ -20,7 +20,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  const [role, setRole] = useState<UserRole>(UserRole.ASSISTANT); // ✅ padrão ASSISTANT
+  const [role, setRole] = useState<UserRole>(UserRole.ASSISTANT); // padrão ASSISTANT
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -30,21 +30,14 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
       if (error) console.error('Erro Supabase getUser:', error);
 
       if (user) {
-        await loadUserProfile(user.id);
+        await loadUserProfile(user.id, user.email || '');
       }
     };
     checkUser();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadUserProfile = async (userId: string) => {
-    const { data: authData, error: authError } = await supabase.auth.getUser();
-    if (authError || !authData.user) {
-      console.error('Erro Supabase getUser (loadUserProfile):', authError);
-      setError(authError?.message || 'Erro ao validar login. Tente novamente.');
-      return;
-    }
-
+  const loadUserProfile = async (userId: string, emailFallback = '') => {
     // 1) tenta carregar profile
     const { data: profile, error: profileFetchError } = await supabase
       .from('profiles')
@@ -55,15 +48,14 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     // 2) se não existir profile, cria automaticamente
     if (profileFetchError || !profile) {
       const fallbackName =
-        (authData.user.user_metadata?.name as string) ||
-        (authData.user.email ? authData.user.email.split('@')[0] : 'Usuário');
+        (emailFallback ? emailFallback.split('@')[0] : 'Usuário');
 
       const { error: profileInsertError } = await supabase
         .from('profiles')
         .insert({
           id: userId,
           name: fallbackName,
-          role: UserRole.ASSISTANT, // ✅ nunca cria ADMIN automaticamente
+          role: UserRole.ASSISTANT, // nunca cria ADMIN automaticamente
           active: true
         });
 
@@ -95,7 +87,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
       onLogin({
         id: userId,
         name: profile2.name || fallbackName,
-        email: authData.user.email || '',
+        email: emailFallback,
         password: '',
         role: (profile2.role as UserRole) || UserRole.ASSISTANT
       });
@@ -111,8 +103,8 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
 
     onLogin({
       id: userId,
-      name: profile.name || (authData.user.user_metadata?.name as string) || '',
-      email: authData.user.email || '',
+      name: profile.name || (emailFallback ? emailFallback.split('@')[0] : ''),
+      email: emailFallback,
       password: '',
       role: (profile.role as UserRole) || UserRole.ASSISTANT
     });
@@ -125,7 +117,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
 
     try {
       if (isLogin) {
-        // ✅ LOGIN
+        // LOGIN
         const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password
@@ -133,17 +125,17 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
 
         if (error) {
           console.error('Erro Supabase signIn:', error);
-          setError(error.message); // ✅ mostra erro real
+          setError(error.message); // mostra erro real
           return;
         }
 
         if (data.user) {
-          await loadUserProfile(data.user.id);
+          await loadUserProfile(data.user.id, data.user.email || email);
         } else {
           setError('Login não retornou usuário. Tente novamente.');
         }
       } else {
-        // ✅ CADASTRO
+        // CADASTRO
         if (!name) {
           setError('Por favor, informe seu nome.');
           return;
@@ -155,22 +147,22 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
           options: {
             data: {
               name,
-              role: UserRole.ASSISTANT // ✅ força ASSISTANT sempre
+              role: UserRole.ASSISTANT // força ASSISTANT sempre
             }
           }
         });
 
         if (error) {
           console.error('Erro Supabase signUp:', error);
-          setError(error.message); // ✅ mostra erro real
+          setError(error.message); // mostra erro real
           return;
         }
 
-        if (data.user) {
-          // tenta entrar (ou carregar perfil) após cadastro
-          await loadUserProfile(data.user.id);
+        if (data.user && data.session) {
+          // sessão criada: entra direto
+          await loadUserProfile(data.user.id, data.user.email || email);
         } else {
-          // alguns casos (ex.: confirmação de e-mail ligada) podem não retornar user imediatamente
+          // sem sessão (ex.: confirmação de e-mail ligada)
           setError('Conta criada. Verifique seu e-mail para confirmar e depois faça login.');
         }
       }
@@ -233,7 +225,6 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                   </div>
                 </div>
 
-                {/* Mantive a UI de seleção, mas o cadastro é forçado para ASSISTANT no backend */}
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">Selecione seu Perfil</label>
                   <div className="grid grid-cols-2 gap-3">
@@ -302,4 +293,10 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
           </form>
         </div>
 
-        <p className="mt-8 text-center
+        <p className="mt-8 text-center text-slate-400 text-[10px] font-black uppercase tracking-[0.3em]">
+          RNV Consulting • Sistema Seguro
+        </p>
+      </div>
+    </div>
+  );
+};
