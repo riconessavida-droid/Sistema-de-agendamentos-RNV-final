@@ -1,6 +1,6 @@
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User, UserRole } from './types';
+import { supabase } from './supabaseClient';
 import { 
   TrendingUp, 
   Mail, 
@@ -22,44 +22,128 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  const [role, setRole] = useState<UserRole>(UserRole.ADMIN); // Padrão como Admin para facilitar
+  const [role, setRole] = useState<UserRole>(UserRole.ADMIN);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleAuth = (e: React.FormEvent) => {
+  useEffect(() => {
+    // Verificar se já está logado (quando recarrega a página)
+    const checkUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        await loadUserProfile(user.id);
+      }
+    };
+    checkUser();
+  }, []);
+
+  const loadUserProfile = async (userId: string) => {
+    const { data: authData, error: authError } = await supabase.auth.getUser()
+    if (authError || !authData.user) {
+      setError('Erro ao validar login. Tente novamente.')
+      return
+    }
+
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('id,name,role,active')
+      .eq('id', userId)
+      .single()
+
+    if (error || !profile) {
+      setError('Erro ao carregar perfil. Tente novamente.')
+      return
+    }
+
+    if (!profile.active) {
+      setError('Sua conta foi desativada. Entre em contato com o administrador.')
+      await supabase.auth.signOut()
+      return
+    }
+
+    const user: User = {
+      id: userId,
+      name: profile.name || authData.user.user_metadata?.name || '',
+      email: authData.user.email || '',
+      password: '',
+      role: (profile.role as UserRole) || UserRole.ASSISTANT
+    }
+
+    onLogin(user)
+  };
+
+  const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setLoading(true);
 
-    const storedUsers = JSON.parse(localStorage.getItem('rnv_users') || '[]');
+    try {
+      if (isLogin) {
+        // Login
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email,
+          password
+        });
 
-    if (isLogin) {
-      const user = storedUsers.find((u: User) => u.email === email && u.password === password);
-      if (user) {
-        onLogin(user);
+        if (error) {
+          setError('E-mail ou senha incorretos.');
+          return;
+        }
+
+        if (data.user) {
+          await loadUserProfile(data.user.id);
+        }
       } else {
-        setError('E-mail ou senha incorretos.');
-      }
-    } else {
-      if (storedUsers.some((u: User) => u.email === email)) {
-        setError('Este e-mail já está cadastrado.');
-        return;
-      }
+        // Cadastro
+        if (!name) {
+          setError('Por favor, informe seu nome.');
+          return;
+        }
 
-      if (!name) {
-        setError('Por favor, informe seu nome.');
-        return;
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              name,
+              role
+            }
+          }
+        });
+
+        if (error) {
+          if (error.message.includes('already registered')) {
+            setError('Este e-mail já está cadastrado.');
+          } else {
+            setError('Erro no cadastro. Tente novamente.');
+          }
+          return;
+        }
+
+        if (data.user) {
+          // Criar profile na tabela
+          const { error: profileError } = await supabase
+            .from('profiles')
+            .insert({
+              id: data.user.id,
+              name,
+              role,
+              active: true
+            });
+
+          if (profileError) {
+            setError('Conta criada, mas erro no perfil. Tente fazer login.');
+            return;
+          }
+
+          // Login automático após cadastro
+          await loadUserProfile(data.user.id);
+        }
       }
-
-      const newUser: User = {
-        id: crypto.randomUUID(),
-        name,
-        email,
-        password,
-        role
-      };
-
-      const updatedUsers = [...storedUsers, newUser];
-      localStorage.setItem('rnv_users', JSON.stringify(updatedUsers));
-      onLogin(newUser);
+    } catch (err) {
+      setError('Erro inesperado. Tente novamente.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -170,10 +254,11 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
 
             <button 
               type="submit"
-              className="w-full bg-yellow-500 hover:bg-yellow-600 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-xl shadow-yellow-500/30 transition-all active:scale-[0.97] flex items-center justify-center gap-3 mt-4"
+              disabled={loading}
+              className="w-full bg-yellow-500 hover:bg-yellow-600 disabled:bg-slate-400 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-xl shadow-yellow-500/30 transition-all active:scale-[0.97] flex items-center justify-center gap-3 mt-4"
             >
-              {isLogin ? 'Entrar no Sistema' : 'Finalizar Cadastro'}
-              <ArrowRight className="w-4 h-4" />
+              {loading ? 'Carregando...' : (isLogin ? 'Entrar no Sistema' : 'Finalizar Cadastro')}
+              {!loading && <ArrowRight className="w-4 h-4" />}
             </button>
           </form>
         </div>
