@@ -1,14 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { User, UserRole } from './types';
 import { supabase } from './supabaseClient';
-import { 
-  TrendingUp, 
-  Mail, 
-  Lock, 
-  User as UserIcon, 
-  ShieldCheck, 
+import {
+  TrendingUp,
+  Mail,
+  Lock,
+  User as UserIcon,
   ArrowRight,
-  ChevronDown,
   UserCheck,
   ShieldAlert
 } from 'lucide-react';
@@ -22,72 +20,76 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  const [role, setRole] = useState<UserRole>(UserRole.ASSISTANT); // Forçado para ASSISTANT
+  const [role, setRole] = useState<UserRole>(UserRole.ASSISTANT); // ✅ padrão ASSISTANT
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    // Verificar se já está logado (quando recarrega a página)
     const checkUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user }, error } = await supabase.auth.getUser();
+      if (error) console.error('Erro Supabase getUser:', error);
+
       if (user) {
         await loadUserProfile(user.id);
       }
     };
     checkUser();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadUserProfile = async (userId: string) => {
-    const { data: authData, error: authError } = await supabase.auth.getUser()
+    const { data: authData, error: authError } = await supabase.auth.getUser();
     if (authError || !authData.user) {
-      setError('Erro ao validar login. Tente novamente.')
-      return
+      console.error('Erro Supabase getUser (loadUserProfile):', authError);
+      setError(authError?.message || 'Erro ao validar login. Tente novamente.');
+      return;
     }
 
-    // 1) Tenta carregar profile
+    // 1) tenta carregar profile
     const { data: profile, error: profileFetchError } = await supabase
       .from('profiles')
       .select('id,name,role,active')
       .eq('id', userId)
-      .single()
+      .single();
 
-    // 2) Se não existir profile, tenta criar automaticamente
+    // 2) se não existir profile, cria automaticamente
     if (profileFetchError || !profile) {
       const fallbackName =
         (authData.user.user_metadata?.name as string) ||
-        (authData.user.email ? authData.user.email.split('@')[0] : 'Usuário')
+        (authData.user.email ? authData.user.email.split('@')[0] : 'Usuário');
 
       const { error: profileInsertError } = await supabase
         .from('profiles')
         .insert({
           id: userId,
           name: fallbackName,
-          role: UserRole.ASSISTANT, // Sempre ASSISTANT por padrão
+          role: UserRole.ASSISTANT, // ✅ nunca cria ADMIN automaticamente
           active: true
-        })
+        });
 
       if (profileInsertError) {
-        console.error('Erro insert profiles:', profileInsertError)
-        setError('Erro no perfil. Avise o administrador para liberar seu acesso.')
-        return
+        console.error('Erro Supabase insert profiles:', profileInsertError);
+        setError(profileInsertError.message || 'Erro no perfil. Fale com o administrador.');
+        return;
       }
 
-      // tenta buscar de novo
+      // busca de novo após criar
       const { data: profile2, error: profileFetchError2 } = await supabase
         .from('profiles')
         .select('id,name,role,active')
         .eq('id', userId)
-        .single()
+        .single();
 
       if (profileFetchError2 || !profile2) {
-        setError('Erro ao carregar perfil. Tente novamente.')
-        return
+        console.error('Erro Supabase select profiles após insert:', profileFetchError2);
+        setError(profileFetchError2?.message || 'Erro ao carregar perfil. Tente novamente.');
+        return;
       }
 
       if (!profile2.active) {
-        setError('Sua conta foi desativada. Entre em contato com o administrador.')
-        await supabase.auth.signOut()
-        return
+        setError('Sua conta foi desativada. Entre em contato com o administrador.');
+        await supabase.auth.signOut();
+        return;
       }
 
       onLogin({
@@ -96,15 +98,15 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
         email: authData.user.email || '',
         password: '',
         role: (profile2.role as UserRole) || UserRole.ASSISTANT
-      })
-      return
+      });
+      return;
     }
 
-    // 3) Profile existe: valida
+    // 3) profile existe: valida
     if (!profile.active) {
-      setError('Sua conta foi desativada. Entre em contato com o administrador.')
-      await supabase.auth.signOut()
-      return
+      setError('Sua conta foi desativada. Entre em contato com o administrador.');
+      await supabase.auth.signOut();
+      return;
     }
 
     onLogin({
@@ -113,7 +115,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
       email: authData.user.email || '',
       password: '',
       role: (profile.role as UserRole) || UserRole.ASSISTANT
-    })
+    });
   };
 
   const handleAuth = async (e: React.FormEvent) => {
@@ -123,22 +125,25 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
 
     try {
       if (isLogin) {
-        // Login
+        // ✅ LOGIN
         const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password
         });
 
         if (error) {
-          setError('E-mail ou senha incorretos.');
+          console.error('Erro Supabase signIn:', error);
+          setError(error.message); // ✅ mostra erro real
           return;
         }
 
         if (data.user) {
           await loadUserProfile(data.user.id);
+        } else {
+          setError('Login não retornou usuário. Tente novamente.');
         }
       } else {
-        // Cadastro
+        // ✅ CADASTRO
         if (!name) {
           setError('Por favor, informe seu nome.');
           return;
@@ -150,23 +155,27 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
           options: {
             data: {
               name,
-              role: UserRole.ASSISTANT // Forçado para ASSISTANT
+              role: UserRole.ASSISTANT // ✅ força ASSISTANT sempre
             }
           }
         });
 
         if (error) {
           console.error('Erro Supabase signUp:', error);
-          setError(error.message); // Mostra mensagem real
+          setError(error.message); // ✅ mostra erro real
           return;
         }
 
         if (data.user) {
-          // Login automático após cadastro (não cria profile aqui, deixa para loadUserProfile)
+          // tenta entrar (ou carregar perfil) após cadastro
           await loadUserProfile(data.user.id);
+        } else {
+          // alguns casos (ex.: confirmação de e-mail ligada) podem não retornar user imediatamente
+          setError('Conta criada. Verifique seu e-mail para confirmar e depois faça login.');
         }
       }
     } catch (err) {
+      console.error('Erro inesperado:', err);
       setError('Erro inesperado. Tente novamente.');
     } finally {
       setLoading(false);
@@ -186,13 +195,13 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
 
         <div className="bg-white rounded-3xl shadow-2xl overflow-hidden border border-slate-200">
           <div className="flex border-b bg-slate-50/50">
-            <button 
+            <button
               onClick={() => { setIsLogin(true); setError(''); }}
               className={`flex-1 py-4 text-xs font-black uppercase tracking-widest transition-all ${isLogin ? 'text-yellow-600 bg-white border-b-2 border-yellow-500' : 'text-slate-400 hover:text-slate-600'}`}
             >
               Entrar
             </button>
-            <button 
+            <button
               onClick={() => { setIsLogin(false); setError(''); }}
               className={`flex-1 py-4 text-xs font-black uppercase tracking-widest transition-all ${!isLogin ? 'text-yellow-600 bg-white border-b-2 border-yellow-500' : 'text-slate-400 hover:text-slate-600'}`}
             >
@@ -213,7 +222,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                   <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">Nome Completo</label>
                   <div className="relative">
                     <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                    <input 
+                    <input
                       required
                       type="text"
                       className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-yellow-500/10 focus:border-yellow-500 transition-all text-sm font-bold text-slate-700"
@@ -224,6 +233,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                   </div>
                 </div>
 
+                {/* Mantive a UI de seleção, mas o cadastro é forçado para ASSISTANT no backend */}
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">Selecione seu Perfil</label>
                   <div className="grid grid-cols-2 gap-3">
@@ -244,6 +254,9 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                       <span className="text-[10px] font-black uppercase tracking-tighter">Assistente</span>
                     </button>
                   </div>
+                  <p className="text-[10px] text-slate-400 font-bold">
+                    Observação: por segurança, novos cadastros entram como <b>Assistente</b>. O Administrador é liberado pelo Supabase.
+                  </p>
                 </div>
               </>
             )}
@@ -252,7 +265,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
               <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">E-mail de Acesso</label>
               <div className="relative">
                 <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                <input 
+                <input
                   required
                   type="email"
                   className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-yellow-500/10 focus:border-yellow-500 transition-all text-sm font-bold text-slate-700"
@@ -267,7 +280,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
               <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">Senha</label>
               <div className="relative">
                 <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                <input 
+                <input
                   required
                   type="password"
                   className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-yellow-500/10 focus:border-yellow-500 transition-all text-sm font-bold text-slate-700"
@@ -278,7 +291,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
               </div>
             </div>
 
-            <button 
+            <button
               type="submit"
               disabled={loading}
               className="w-full bg-yellow-500 hover:bg-yellow-600 disabled:bg-slate-400 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-xl shadow-yellow-500/30 transition-all active:scale-[0.97] flex items-center justify-center gap-3 mt-4"
@@ -288,11 +301,5 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
             </button>
           </form>
         </div>
-        
-        <p className="mt-8 text-center text-slate-400 text-[10px] font-black uppercase tracking-[0.3em]">
-          RNV Consulting • Sistema Seguro
-        </p>
-      </div>
-    </div>
-  );
-};
+
+        <p className="mt-8 text-center
