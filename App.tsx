@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  Plus, 
-  Calendar, 
-  ChevronRight, 
+import {
+  Plus,
+  Calendar,
+  ChevronRight,
   ChevronDown,
   TrendingUp,
   Search,
@@ -30,10 +30,10 @@ import {
   CheckSquare
 } from 'lucide-react';
 import { Client, MeetingStatus, User, UserRole } from './types';
-import { 
-  STATUS_OPTIONS, 
-  GROUP_COLORS, 
-  getNextMonths, 
+import {
+  STATUS_OPTIONS,
+  GROUP_COLORS,
+  getNextMonths,
   getMonthLabel,
   MEETING_LABEL_TEXTS,
   MONTH_NAMES
@@ -41,6 +41,7 @@ import {
 import { ClientForm } from './ClientForm';
 import { RemindersPanel } from './RemindersPanel';
 import { Auth } from './Auth';
+import { supabase } from './supabaseClient'; // ✅ ADICIONADO
 
 const LOCAL_STORAGE_KEY = 'rnv_consulting_base_v1';
 const SESSION_KEY = 'rnv_current_session';
@@ -58,7 +59,7 @@ const App: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterMonth, setFilterMonth] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
-  
+
   const [checklistMonth, setChecklistMonth] = useState<string>(() => {
     const now = new Date();
     return `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}`;
@@ -94,9 +95,19 @@ const App: React.FC = () => {
     localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
   };
 
-  const handleLogout = () => {
-    setCurrentUser(null);
-    localStorage.removeItem(SESSION_KEY);
+  // ✅ CORRIGIDO: logout real no Supabase (não só localStorage)
+  const handleLogout = async () => {
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        console.error('Erro ao deslogar no Supabase:', error);
+      }
+    } finally {
+      setCurrentUser(null);
+      localStorage.removeItem(SESSION_KEY);
+      // Se quiser também limpar os clientes do navegador ao sair, descomente:
+      // localStorage.removeItem(LOCAL_STORAGE_KEY);
+    }
   };
 
   const isClientInactive = (client: Client) => {
@@ -128,7 +139,7 @@ const App: React.FC = () => {
       if (c.id === id) {
         let updated = { ...c, ...data };
         if (data.phoneDigits) {
-            updated.phoneDigits = data.phoneDigits.length > 4 ? data.phoneDigits.slice(-4) : data.phoneDigits;
+          updated.phoneDigits = data.phoneDigits.length > 4 ? data.phoneDigits.slice(-4) : data.phoneDigits;
         }
         return updated;
       }
@@ -166,6 +177,19 @@ const App: React.FC = () => {
       }
       return c;
     }));
+    setClients(prev => prev.map(c => {
+      if (c.id === clientId) {
+        const currentData = c.statusByMonth[monthYear] || { status: MeetingStatus.PENDING };
+        return {
+          ...c,
+          statusByMonth: {
+            ...c.statusByMonth,
+            [monthYear]: { ...currentData, ...updates }
+          }
+        };
+      }
+      return c;
+    }));
   };
 
   const addMoreMonth = () => {
@@ -183,10 +207,10 @@ const App: React.FC = () => {
   const filteredClients = useMemo(() => {
     return clients
       .filter(c => {
-        const matchesSearch = c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                             c.phoneDigits.includes(searchTerm);
+        const matchesSearch = c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          c.phoneDigits.includes(searchTerm);
         const matchesMonth = filterMonth === 'all' || c.startMonthYear === filterMonth;
-        
+
         const isInactive = isClientInactive(c);
         let matchesStatus = true;
         if (statusFilter === 'active') matchesStatus = !isInactive;
@@ -202,11 +226,11 @@ const App: React.FC = () => {
 
   const checklistData = useMemo(() => {
     const activeClients = clients.filter(c => !isClientInactive(c));
-    
+
     const activeThisMonth = activeClients.reduce((acc, client) => {
       const cycleMonths = getNextMonths(client.startMonthYear, 5);
       const meetingIdx = cycleMonths.indexOf(checklistMonth);
-      
+
       if (meetingIdx !== -1) {
         const statusData = client.statusByMonth[checklistMonth];
         acc.push({
@@ -218,16 +242,16 @@ const App: React.FC = () => {
         });
       }
       return acc;
-    }, [] as Array<{ 
-      client: Client; 
-      meetingIdx: number; 
-      meetingLabel: string; 
-      status: MeetingStatus; 
-      doneDate: number; 
+    }, [] as Array<{
+      client: Client;
+      meetingIdx: number;
+      meetingLabel: string;
+      status: MeetingStatus;
+      doneDate: number;
     }>);
 
-    const pendingAll = activeThisMonth.filter(item => 
-      item.status !== MeetingStatus.DONE && 
+    const pendingAll = activeThisMonth.filter(item =>
+      item.status !== MeetingStatus.DONE &&
       item.status !== MeetingStatus.CLOSED_CONTRACT
     );
 
@@ -241,8 +265,8 @@ const App: React.FC = () => {
 
     return {
       pending: filteredPending,
-      completed: activeThisMonth.filter(item => 
-        item.status === MeetingStatus.DONE || 
+      completed: activeThisMonth.filter(item =>
+        item.status === MeetingStatus.DONE ||
         item.status === MeetingStatus.CLOSED_CONTRACT
       ),
       counts: {
@@ -257,7 +281,7 @@ const App: React.FC = () => {
   const stats = useMemo(() => {
     const totalAtivos = clients.filter(c => !isClientInactive(c)).length;
     const totalFinalizados = clients.filter(c => isClientInactive(c)).length;
-    
+
     const targetMonth = filterMonth === 'all' ? new Date().toISOString().slice(0, 7) : filterMonth;
     const entradasNoMes = clients.filter(c => c.startMonthYear === targetMonth).length;
 
@@ -269,7 +293,7 @@ const App: React.FC = () => {
     const monthMap: Record<string, number> = {};
     const last8Months = getNextMonths('2025-01', 12);
     clients.forEach(client => {
-      // Fix: Object.entries values are sometimes inferred as 'unknown'. 
+      // Fix: Object.entries values are sometimes inferred as 'unknown'.
       // We cast 'data' to ensure access to the 'status' property defined in our types.
       Object.entries(client.statusByMonth).forEach(([m, data]) => {
         if ((data as { status: MeetingStatus }).status === MeetingStatus.CLOSED_CONTRACT) {
@@ -302,12 +326,12 @@ const App: React.FC = () => {
               RNV Consultoria
             </h1>
           </div>
-          
+
           <div className="flex items-center gap-6">
             <div className="relative hidden md:block">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-              <input 
-                placeholder="Pesquisar cliente..." 
+              <input
+                placeholder="Pesquisar cliente..."
                 className="pl-9 pr-4 py-2 bg-slate-100 border-none rounded-full text-sm focus:ring-2 focus:ring-yellow-500 outline-none w-64 transition-all focus:bg-white focus:shadow-inner"
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
@@ -321,7 +345,7 @@ const App: React.FC = () => {
                   {currentUser.role === UserRole.ADMIN ? 'Administrador' : 'Assistente'}
                 </p>
               </div>
-              <button 
+              <button
                 onClick={handleLogout}
                 className="p-2.5 bg-slate-100 text-slate-500 hover:bg-red-50 hover:text-red-600 rounded-xl transition-all group relative"
                 title="Sair do Sistema"
@@ -329,8 +353,8 @@ const App: React.FC = () => {
                 <LogOut className="w-5 h-5" />
               </button>
             </div>
-            
-            <button 
+
+            <button
               onClick={() => {
                 setEditingClient(null);
                 setIsFormOpen(true);
@@ -346,14 +370,14 @@ const App: React.FC = () => {
 
       <div className="bg-white border-b border-slate-200">
         <div className="max-w-[1600px] mx-auto px-4 flex gap-8">
-          <button 
+          <button
             onClick={() => setActiveTab('overview')}
             className={`py-4 text-xs font-black uppercase tracking-[0.2em] flex items-center gap-2 border-b-2 transition-all ${activeTab === 'overview' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
           >
             <LayoutDashboard className="w-4 h-4" />
             Visão Geral
           </button>
-          <button 
+          <button
             onClick={() => setActiveTab('checklist')}
             className={`py-4 text-xs font-black uppercase tracking-[0.2em] flex items-center gap-2 border-b-2 transition-all ${activeTab === 'checklist' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
           >
@@ -361,7 +385,7 @@ const App: React.FC = () => {
             Checklist Mensal
           </button>
           {currentUser.role === UserRole.ADMIN && (
-            <button 
+            <button
               onClick={() => setActiveTab('reports')}
               className={`py-4 text-xs font-black uppercase tracking-[0.2em] flex items-center gap-2 border-b-2 transition-all ${activeTab === 'reports' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
             >
@@ -412,7 +436,7 @@ const App: React.FC = () => {
                     <Filter className="w-3.5 h-3.5" /> Filtrar por Mês de Início
                   </h3>
                   {filterMonth !== 'all' && (
-                    <button 
+                    <button
                       onClick={() => setFilterMonth('all')}
                       className="text-[10px] font-bold text-red-500 hover:text-red-600 flex items-center gap-1 uppercase"
                     >
@@ -473,14 +497,14 @@ const App: React.FC = () => {
                 <h2 className="font-bold text-slate-800 flex items-center gap-2 uppercase tracking-widest text-xs">
                   Planilha Operacional RNV
                 </h2>
-                <button 
+                <button
                   onClick={addMoreMonth}
                   className="text-[10px] font-black uppercase tracking-widest text-yellow-600 hover:text-yellow-700 flex items-center gap-1 transition-colors bg-yellow-50 px-3 py-1.5 rounded-lg border border-yellow-100"
                 >
                   Ver Mais Meses <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
-              
+
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse">
                   <thead>
@@ -508,7 +532,7 @@ const App: React.FC = () => {
                             <td className={`px-4 py-4 sticky left-0 z-10 w-80 shadow-[2px_0_5px_rgba(0,0,0,0.05)] border-r ${isConsultantRequired ? 'bg-orange-500 text-white' : isFinalized ? 'bg-slate-200 text-slate-500' : client.groupColor}`}>
                               <div className="flex items-start gap-3">
                                 <div className="shrink-0 pt-0.5">
-                                  <input 
+                                  <input
                                     type="number"
                                     min="1"
                                     value={client.sequenceInMonth}
@@ -517,7 +541,7 @@ const App: React.FC = () => {
                                     title="Ordem de entrada"
                                   />
                                 </div>
-                                
+
                                 <div className="flex flex-col overflow-hidden flex-1 space-y-1">
                                   <div className="flex flex-col">
                                     <span className={`font-bold truncate text-sm leading-tight uppercase ${isFinalized ? 'line-through opacity-50' : ''}`}>{client.name}</span>
@@ -537,13 +561,13 @@ const App: React.FC = () => {
                                 </div>
 
                                 <div className="flex flex-col items-center gap-1 shrink-0">
-                                  <button 
+                                  <button
                                     onClick={() => handleEditClick(client)}
                                     className={`p-1.5 rounded-lg transition-colors ${isConsultantRequired ? 'hover:bg-white/20 text-white' : 'hover:bg-yellow-50 text-slate-400 hover:text-yellow-600'}`}
                                   >
                                     <Pencil className="w-4 h-4" />
                                   </button>
-                                  <button 
+                                  <button
                                     onClick={() => deleteClient(client.id)}
                                     className={`p-1.5 rounded-lg transition-colors ${isConsultantRequired ? 'hover:bg-white/20 text-white' : 'hover:bg-red-50 text-slate-400 hover:text-red-500'}`}
                                   >
@@ -552,7 +576,7 @@ const App: React.FC = () => {
                                 </div>
                               </div>
                             </td>
-                            
+
                             {visibleMonths.map((m) => {
                               const cycleIdx = clientCycleMonths.indexOf(m);
                               const isInCycle = cycleIdx !== -1;
@@ -577,7 +601,7 @@ const App: React.FC = () => {
                                       </div>
 
                                       <div className="flex items-center gap-2">
-                                        <button 
+                                        <button
                                           onClick={() => updateMeetingData(client.id, m, { status: isNotDone ? MeetingStatus.PENDING : MeetingStatus.NOT_DONE })}
                                           className={`w-5 h-5 rounded-full border transition-all flex items-center justify-center shrink-0 ${isNotDone ? 'bg-red-500 border-red-600 scale-110 shadow-md shadow-red-100' : 'bg-white border-slate-200 hover:border-red-300'}`}
                                         >
@@ -586,7 +610,7 @@ const App: React.FC = () => {
 
                                         <div className={`flex-1 flex items-center justify-between gap-1 px-2 py-1.5 rounded-lg border transition-all ${isDone ? 'bg-green-50 border-green-200' : 'bg-slate-50 border-slate-200'}`}>
                                           <span className="text-[9px] font-black text-slate-400 uppercase leading-none text-left shrink-0">REALIZADO DIA:</span>
-                                          <input 
+                                          <input
                                             type="number"
                                             min="1"
                                             max="31"
@@ -600,7 +624,7 @@ const App: React.FC = () => {
                                           />
                                         </div>
 
-                                        <button 
+                                        <button
                                           onClick={() => updateMeetingData(client.id, m, { status: isDone ? MeetingStatus.PENDING : MeetingStatus.DONE })}
                                           className={`w-5 h-5 rounded-full border transition-all flex items-center justify-center shrink-0 ${isDone ? 'bg-green-500 border-green-600 scale-110 shadow-md shadow-green-100' : 'bg-white border-slate-200 hover:border-green-300'}`}
                                         >
@@ -609,13 +633,13 @@ const App: React.FC = () => {
                                       </div>
 
                                       <div className="relative group/status">
-                                        <select 
+                                        <select
                                           value={currentStatus}
                                           onChange={(e) => updateMeetingData(client.id, m, { status: e.target.value as MeetingStatus })}
                                           className={`appearance-none w-full text-[9px] py-1.5 px-2 rounded-md border bg-white font-black cursor-pointer transition-all pr-6 outline-none
                                             ${currentStatus === MeetingStatus.RESCHEDULED ? 'border-amber-300 text-amber-700 bg-amber-50' :
                                               currentStatus === MeetingStatus.CLOSED_CONTRACT ? 'border-slate-800 text-white bg-slate-800' :
-                                              'border-slate-200 text-slate-500'}
+                                                'border-slate-200 text-slate-500'}
                                           `}
                                         >
                                           {STATUS_OPTIONS.map(opt => (
@@ -641,19 +665,19 @@ const App: React.FC = () => {
                     ) : (
                       <tr>
                         <td colSpan={visibleMonths.length + 1} className="py-24 text-center">
-                           <div className="flex flex-col items-center gap-4 text-slate-400">
-                              <Search className="w-16 h-16 opacity-10" />
-                              <div className="space-y-1">
-                                <p className="font-bold text-slate-500 uppercase tracking-widest text-xs">Nenhum cliente encontrado</p>
-                                <p className="text-sm">Ajuste os filtros de busca, mês ou status.</p>
-                              </div>
-                              <button 
-                                onClick={() => {setSearchTerm(''); setFilterMonth('all'); setStatusFilter('all');}}
-                                className="bg-yellow-500 text-white px-6 py-2 rounded-full font-bold text-xs shadow-md hover:bg-yellow-600 transition-all uppercase tracking-wider"
-                              >
-                                Limpar Filtros
-                              </button>
-                           </div>
+                          <div className="flex flex-col items-center gap-4 text-slate-400">
+                            <Search className="w-16 h-16 opacity-10" />
+                            <div className="space-y-1">
+                              <p className="font-bold text-slate-500 uppercase tracking-widest text-xs">Nenhum cliente encontrado</p>
+                              <p className="text-sm">Ajuste os filtros de busca, mês ou status.</p>
+                            </div>
+                            <button
+                              onClick={() => { setSearchTerm(''); setFilterMonth('all'); setStatusFilter('all'); }}
+                              className="bg-yellow-500 text-white px-6 py-2 rounded-full font-bold text-xs shadow-md hover:bg-yellow-600 transition-all uppercase tracking-wider"
+                            >
+                              Limpar Filtros
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     )}
@@ -672,10 +696,10 @@ const App: React.FC = () => {
                 </h2>
                 <p className="text-slate-500 font-medium">Controle focado apenas em <span className="text-yellow-600 font-bold">Clientes Ativos</span> de {getMonthLabel(checklistMonth)}</p>
               </div>
-              
+
               <div className="flex flex-col sm:flex-row items-center gap-4">
                 <div className="flex items-center gap-3 bg-slate-50 p-2 rounded-xl border border-slate-100 shadow-inner">
-                  <button 
+                  <button
                     onClick={() => {
                       const [y, m] = checklistMonth.split('-').map(Number);
                       const prev = new Date(y, m - 2, 1);
@@ -688,7 +712,7 @@ const App: React.FC = () => {
                   <span className="px-4 text-[10px] font-black uppercase tracking-widest text-slate-700 min-w-[150px] text-center">
                     {getMonthLabel(checklistMonth)}
                   </span>
-                  <button 
+                  <button
                     onClick={() => {
                       const [y, m] = checklistMonth.split('-').map(Number);
                       const next = new Date(y, m, 1);
@@ -703,34 +727,34 @@ const App: React.FC = () => {
             </div>
 
             <div className="bg-white p-2 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap gap-2">
-               <button 
-                 onClick={() => setChecklistSubFilter('all')}
-                 className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${checklistSubFilter === 'all' ? 'bg-slate-800 text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}
-               >
-                 <Filter className="w-3.5 h-3.5" />
-                 Todos <span className="opacity-40 ml-1">({checklistData.counts.all})</span>
-               </button>
-               <button 
-                 onClick={() => setChecklistSubFilter('pending')}
-                 className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${checklistSubFilter === 'pending' ? 'bg-yellow-500 text-white shadow-lg shadow-yellow-200' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}
-               >
-                 <Clock className="w-3.5 h-3.5" />
-                 Pendentes <span className="opacity-40 ml-1">({checklistData.counts.pending})</span>
-               </button>
-               <button 
-                 onClick={() => setChecklistSubFilter('not_done')}
-                 className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${checklistSubFilter === 'not_done' ? 'bg-red-500 text-white shadow-lg shadow-red-200' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}
-               >
-                 <AlertCircle className="w-3.5 h-3.5" />
-                 Faltaram <span className="opacity-40 ml-1">({checklistData.counts.not_done})</span>
-               </button>
-               <button 
-                 onClick={() => setChecklistSubFilter('rescheduled')}
-                 className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${checklistSubFilter === 'rescheduled' ? 'bg-blue-500 text-white shadow-lg shadow-blue-200' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}
-               >
-                 <CalendarClock className="w-3.5 h-3.5" />
-                 Remarcadas <span className="opacity-40 ml-1">({checklistData.counts.rescheduled})</span>
-               </button>
+              <button
+                onClick={() => setChecklistSubFilter('all')}
+                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${checklistSubFilter === 'all' ? 'bg-slate-800 text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}
+              >
+                <Filter className="w-3.5 h-3.5" />
+                Todos <span className="opacity-40 ml-1">({checklistData.counts.all})</span>
+              </button>
+              <button
+                onClick={() => setChecklistSubFilter('pending')}
+                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${checklistSubFilter === 'pending' ? 'bg-yellow-500 text-white shadow-lg shadow-yellow-200' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}
+              >
+                <Clock className="w-3.5 h-3.5" />
+                Pendentes <span className="opacity-40 ml-1">({checklistData.counts.pending})</span>
+              </button>
+              <button
+                onClick={() => setChecklistSubFilter('not_done')}
+                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${checklistSubFilter === 'not_done' ? 'bg-red-500 text-white shadow-lg shadow-red-200' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}
+              >
+                <AlertCircle className="w-3.5 h-3.5" />
+                Faltaram <span className="opacity-40 ml-1">({checklistData.counts.not_done})</span>
+              </button>
+              <button
+                onClick={() => setChecklistSubFilter('rescheduled')}
+                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${checklistSubFilter === 'rescheduled' ? 'bg-blue-500 text-white shadow-lg shadow-blue-200' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}
+              >
+                <CalendarClock className="w-3.5 h-3.5" />
+                Remarcadas <span className="opacity-40 ml-1">({checklistData.counts.rescheduled})</span>
+              </button>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -742,7 +766,7 @@ const App: React.FC = () => {
                   </h3>
                   <div className="h-px bg-slate-200 flex-1 ml-4" />
                 </div>
-                
+
                 <div className="space-y-3">
                   {checklistData.pending.length > 0 ? (
                     checklistData.pending.map((item) => (
@@ -767,16 +791,16 @@ const App: React.FC = () => {
                               </span>
                             </div>
                           </div>
-                          
+
                           <div className="flex flex-col gap-2">
-                            <button 
+                            <button
                               onClick={() => updateMeetingData(item.client.id, checklistMonth, { status: MeetingStatus.DONE, customDate: new Date().getDate() })}
                               className="bg-slate-50 hover:bg-green-500 hover:text-white text-slate-400 p-3 rounded-2xl transition-all border border-slate-100 shadow-sm active:scale-90"
                               title="Marcar como Concluída"
                             >
                               <CheckCircle2 className="w-6 h-6" />
                             </button>
-                            <button 
+                            <button
                               onClick={() => updateMeetingData(item.client.id, checklistMonth, { status: MeetingStatus.NOT_DONE })}
                               className="bg-slate-50 hover:bg-red-500 hover:text-white text-slate-400 p-2 rounded-xl transition-all border border-slate-100 shadow-sm active:scale-90"
                               title="Marcar Falta"
@@ -808,24 +832,24 @@ const App: React.FC = () => {
                   {checklistData.completed.length > 0 ? (
                     checklistData.completed.map((item) => (
                       <div key={item.client.id} className="bg-green-50/30 p-5 rounded-2xl border border-green-100/50 shadow-sm flex items-center justify-between animate-in fade-in duration-500">
-                         <div className="flex items-center gap-4">
-                            <div className="w-10 h-10 bg-green-500 text-white rounded-xl flex items-center justify-center shadow-lg shadow-green-100">
-                              <CheckCircle2 className="w-5 h-5" />
-                            </div>
-                            <div>
-                               <h4 className="font-bold text-slate-700 uppercase text-xs line-through decoration-slate-400">{item.client.name}</h4>
-                               <p className="text-[10px] font-black text-green-600 uppercase tracking-tighter">
-                                 {item.meetingLabel} • Feito Dia {item.doneDate}
-                               </p>
-                            </div>
-                         </div>
-                         <button 
-                            onClick={() => updateMeetingData(item.client.id, checklistMonth, { status: MeetingStatus.PENDING })}
-                            className="text-slate-400 hover:text-red-500 p-2 transition-colors"
-                            title="Voltar para Pendente"
-                         >
-                           <XCircle className="w-5 h-5" />
-                         </button>
+                        <div className="flex items-center gap-4">
+                          <div className="w-10 h-10 bg-green-500 text-white rounded-xl flex items-center justify-center shadow-lg shadow-green-100">
+                            <CheckCircle2 className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="font-bold text-slate-700 uppercase text-xs line-through decoration-slate-400">{item.client.name}</h4>
+                            <p className="text-[10px] font-black text-green-600 uppercase tracking-tighter">
+                              {item.meetingLabel} • Feito Dia {item.doneDate}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => updateMeetingData(item.client.id, checklistMonth, { status: MeetingStatus.PENDING })}
+                          className="text-slate-400 hover:text-red-500 p-2 transition-colors"
+                          title="Voltar para Pendente"
+                        >
+                          <XCircle className="w-5 h-5" />
+                        </button>
                       </div>
                     ))
                   ) : (
@@ -839,70 +863,70 @@ const App: React.FC = () => {
           </div>
         ) : (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
-             <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm space-y-8">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <h2 className="text-2xl font-black text-slate-800 flex items-center gap-3">
-                      <Trophy className="w-7 h-7 text-yellow-500" />
-                      Conversão de Contratos
-                    </h2>
-                    <p className="text-slate-500 font-medium">Histórico mensal de contratos encerrados (CLOSED_CONTRACT)</p>
-                  </div>
-                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-center min-w-[150px]">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Total de Sucessos</p>
-                    <p className="text-3xl font-black text-slate-800">
-                      {reportData.reduce((acc, curr) => acc + curr.count, 0)}
-                    </p>
-                  </div>
+            <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm space-y-8">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <h2 className="text-2xl font-black text-slate-800 flex items-center gap-3">
+                    <Trophy className="w-7 h-7 text-yellow-500" />
+                    Conversão de Contratos
+                  </h2>
+                  <p className="text-slate-500 font-medium">Histórico mensal de contratos encerrados (CLOSED_CONTRACT)</p>
                 </div>
-
-                <div className="relative h-80 w-full pt-8 px-4">
-                  <div className="absolute inset-x-4 top-8 bottom-12 flex items-end justify-between gap-4">
-                    {reportData.map((data, idx) => {
-                      const heightPercent = (data.count / maxCount) * 100;
-                      return (
-                        <div key={idx} className="group relative flex flex-col items-center flex-1">
-                          <div className="absolute -top-10 opacity-0 group-hover:opacity-100 transition-all bg-slate-800 text-white text-[10px] font-black px-2 py-1 rounded shadow-lg -translate-y-2 group-hover:translate-y-0">
-                            {data.count} Contratos
-                          </div>
-                          
-                          <div 
-                            style={{ height: `${heightPercent}%` }}
-                            className="w-full max-w-[40px] bg-gradient-to-t from-yellow-500 to-yellow-400 rounded-t-xl transition-all duration-700 shadow-lg shadow-yellow-500/20 group-hover:from-slate-800 group-hover:to-slate-700 group-hover:shadow-slate-800/20"
-                          />
-                          
-                          <div className="absolute top-[105%] flex flex-col items-center">
-                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter whitespace-nowrap overflow-hidden max-w-[60px] text-ellipsis">
-                              {data.label.split(' ')[0]}
-                            </span>
-                            <span className="text-[8px] font-bold text-slate-300">
-                              {data.label.split(' ')[1]}
-                            </span>
-                          </div>
-
-                          {data.count === 0 && (
-                            <div className="w-1 h-1 rounded-full bg-slate-200 mt-2" />
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="absolute left-0 right-0 bottom-12 h-px bg-slate-100" />
-                </div>
-                
-                <div className="pt-12 text-center">
-                  <p className="text-xs font-medium text-slate-400 flex items-center justify-center gap-2">
-                    <AlertCircle className="w-3.5 h-3.5" />
-                    Este gráfico reflete o status 'Contrato Encerrado' aplicado em cada mês específico.
+                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-center min-w-[150px]">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Total de Sucessos</p>
+                  <p className="text-3xl font-black text-slate-800">
+                    {reportData.reduce((acc, curr) => acc + curr.count, 0)}
                   </p>
                 </div>
-             </div>
+              </div>
+
+              <div className="relative h-80 w-full pt-8 px-4">
+                <div className="absolute inset-x-4 top-8 bottom-12 flex items-end justify-between gap-4">
+                  {reportData.map((data, idx) => {
+                    const heightPercent = (data.count / maxCount) * 100;
+                    return (
+                      <div key={idx} className="group relative flex flex-col items-center flex-1">
+                        <div className="absolute -top-10 opacity-0 group-hover:opacity-100 transition-all bg-slate-800 text-white text-[10px] font-black px-2 py-1 rounded shadow-lg -translate-y-2 group-hover:translate-y-0">
+                          {data.count} Contratos
+                        </div>
+
+                        <div
+                          style={{ height: `${heightPercent}%` }}
+                          className="w-full max-w-[40px] bg-gradient-to-t from-yellow-500 to-yellow-400 rounded-t-xl transition-all duration-700 shadow-lg shadow-yellow-500/20 group-hover:from-slate-800 group-hover:to-slate-700 group-hover:shadow-slate-800/20"
+                        />
+
+                        <div className="absolute top-[105%] flex flex-col items-center">
+                          <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter whitespace-nowrap overflow-hidden max-w-[60px] text-ellipsis">
+                            {data.label.split(' ')[0]}
+                          </span>
+                          <span className="text-[8px] font-bold text-slate-300">
+                            {data.label.split(' ')[1]}
+                          </span>
+                        </div>
+
+                        {data.count === 0 && (
+                          <div className="w-1 h-1 rounded-full bg-slate-200 mt-2" />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="absolute left-0 right-0 bottom-12 h-px bg-slate-100" />
+              </div>
+
+              <div className="pt-12 text-center">
+                <p className="text-xs font-medium text-slate-400 flex items-center justify-center gap-2">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  Este gráfico reflete o status 'Contrato Encerrado' aplicado em cada mês específico.
+                </p>
+              </div>
+            </div>
           </div>
         )}
       </main>
 
       {isFormOpen && (
-        <ClientForm 
+        <ClientForm
           onAdd={addClient}
           onUpdate={updateClient}
           onClose={() => {
@@ -916,9 +940,9 @@ const App: React.FC = () => {
 
       <footer className="py-10 border-t border-slate-200 bg-white mt-auto">
         <div className="max-w-[1600px] mx-auto px-4 text-center">
-            <p className="text-[10px] text-slate-400 font-black uppercase tracking-[0.3em]">
-              RNV Consultoria Financeira &copy; {new Date().getFullYear()}
-            </p>
+          <p className="text-[10px] text-slate-400 font-black uppercase tracking-[0.3em]">
+            RNV Consultoria Financeira &copy; {new Date().getFullYear()}
+          </p>
         </div>
       </footer>
     </div>
