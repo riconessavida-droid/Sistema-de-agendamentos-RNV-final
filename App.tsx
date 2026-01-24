@@ -24,7 +24,9 @@ import {
   BarChart3,
   Trophy,
   UserMinus,
-  CheckSquare
+  CheckSquare,
+  Download,
+  UserCog
 } from 'lucide-react';
 import { Client, MeetingStatus, User, UserRole } from './types';
 import {
@@ -41,7 +43,7 @@ import { supabase } from './supabaseClient';
 
 const SESSION_KEY = 'rnv_current_session';
 
-type TabType = 'overview' | 'checklist' | 'reports';
+type TabType = 'overview' | 'checklist' | 'reports' | 'users';
 type ChecklistSubFilter = 'all' | 'pending' | 'not_done' | 'rescheduled';
 type StatusFilter = 'all' | 'active' | 'finalized';
 
@@ -84,6 +86,9 @@ const App: React.FC = () => {
   const [clients, setClients] = useState<Client[]>([]);
   const [loadingClients, setLoadingClients] = useState(false);
 
+  const [users, setUsers] = useState<User[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
 
@@ -101,7 +106,7 @@ const App: React.FC = () => {
     return getNextMonths('2025-06', 8);
   });
 
-  // 1) Recarrega usuário da sessão local (igual antes)
+  // 1) Recarrega usuário da sessão local
   useEffect(() => {
     const session = localStorage.getItem(SESSION_KEY);
     if (session) {
@@ -134,6 +139,30 @@ const App: React.FC = () => {
     loadClients();
   }, [currentUser]);
 
+  // 3) Carrega usuários (só ADMIN)
+  useEffect(() => {
+    const loadUsers = async () => {
+      if (!currentUser || currentUser.role !== UserRole.ADMIN) return;
+      setLoadingUsers(true);
+
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id,name,email,role,active')
+        .order('name', { ascending: true });
+
+      if (error) {
+        console.error('Erro ao carregar users:', error);
+        setLoadingUsers(false);
+        return;
+      }
+
+      setUsers(data as User[]);
+      setLoadingUsers(false);
+    };
+
+    loadUsers();
+  }, [currentUser]);
+
   const handleLogin = (user: User) => {
     const sessionUser = { ...user };
     delete sessionUser.password;
@@ -149,8 +178,68 @@ const App: React.FC = () => {
       setCurrentUser(null);
       localStorage.removeItem(SESSION_KEY);
       setClients([]);
+      setUsers([]);
       setActiveTab('overview');
     }
+  };
+
+  const exportClientsToCSV = () => {
+    if (clients.length === 0) {
+      alert('Nenhum cliente para exportar.');
+      return;
+    }
+
+    const headers = [
+      'ID',
+      'Nome',
+      'Telefone (últimos 4)',
+      'Mês de Início',
+      'Dia de Início',
+      'Sequência no Mês',
+      'Cor do Grupo',
+      'Status por Mês (JSON)'
+    ];
+
+    const rows = clients.map(c => [
+      c.id,
+      `"${c.name}"`,
+      c.phoneDigits,
+      c.startMonthYear,
+      c.startDate,
+      c.sequenceInMonth,
+      c.groupColor,
+      JSON.stringify(c.statusByMonth)
+    ]);
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(r => r.join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `rnv_clientes_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const updateUser = async (userId: string, updates: Partial<{ role: UserRole; active: boolean }>) => {
+    const { error } = await supabase
+      .from('profiles')
+      .update(updates)
+      .eq('id', userId);
+
+    if (error) {
+      console.error('Erro ao atualizar user:', error);
+      alert(`Erro ao atualizar usuário: ${error.message}`);
+      return;
+    }
+
+    setUsers(prev => prev.map(u => u.id === userId ? { ...u, ...updates } : u));
   };
 
   const isClientInactive = (client: Client) => {
@@ -175,7 +264,6 @@ const App: React.FC = () => {
       groupColor
     };
 
-    // otimista
     setClients(prev => [...prev, newClient]);
 
     const { error } = await supabase
@@ -184,7 +272,6 @@ const App: React.FC = () => {
 
     if (error) {
       console.error('Erro ao inserir client:', error);
-      // rollback simples
       setClients(prev => prev.filter(c => c.id !== newClient.id));
       window.alert(`Erro ao salvar cliente no Supabase: ${error.message}`);
     }
@@ -194,13 +281,11 @@ const App: React.FC = () => {
     const before = clients.find(c => c.id === id);
     if (!before) return;
 
-    // aplica regra de phoneDigits (últimos 4) como seu código fazia
     let patched: Partial<Client> = { ...data };
     if (patched.phoneDigits) {
       patched.phoneDigits = patched.phoneDigits.length > 4 ? patched.phoneDigits.slice(-4) : patched.phoneDigits;
     }
 
-    // otimista
     const updatedLocal = clients.map(c => (c.id === id ? { ...c, ...patched } : c));
     setClients(updatedLocal);
     setEditingClient(null);
@@ -214,7 +299,6 @@ const App: React.FC = () => {
 
     if (error) {
       console.error('Erro ao atualizar client:', error);
-      // rollback
       setClients(prev => prev.map(c => (c.id === id ? before : c)));
       window.alert(`Erro ao atualizar cliente no Supabase: ${error.message}`);
     }
@@ -282,7 +366,6 @@ const App: React.FC = () => {
       }
     };
 
-    // otimista
     setClients(prev => prev.map(c => (c.id === clientId ? afterClient : c)));
 
     const { error } = await supabase
@@ -292,7 +375,6 @@ const App: React.FC = () => {
 
     if (error) {
       console.error('Erro ao atualizar status_by_month:', error);
-      // rollback
       setClients(prev => prev.map(c => (c.id === clientId ? before : c)));
       window.alert(`Erro ao salvar status no Supabase: ${error.message}`);
     }
@@ -462,16 +544,27 @@ const App: React.FC = () => {
               </button>
             </div>
 
-            <button
-              onClick={() => {
-                setEditingClient(null);
-                setIsFormOpen(true);
-              }}
-              className="flex items-center gap-2 bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg font-bold transition-all shadow-md active:scale-95"
-            >
-              <Plus className="w-5 h-5" />
-              <span className="hidden sm:inline">Novo Cliente</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={exportClientsToCSV}
+                className="flex items-center gap-2 bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-lg font-bold transition-all shadow-md active:scale-95"
+                title="Exportar clientes (CSV)"
+              >
+                <Download className="w-5 h-5" />
+                <span className="hidden sm:inline">Exportar</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setEditingClient(null);
+                  setIsFormOpen(true);
+                }}
+                className="flex items-center gap-2 bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg font-bold transition-all shadow-md active:scale-95"
+              >
+                <Plus className="w-5 h-5" />
+                <span className="hidden sm:inline">Novo Cliente</span>
+              </button>
+            </div>
           </div>
         </div>
       </nav>
@@ -493,13 +586,22 @@ const App: React.FC = () => {
             Checklist Mensal
           </button>
           {currentUser.role === UserRole.ADMIN && (
-            <button
-              onClick={() => setActiveTab('reports')}
-              className={`py-4 text-xs font-black uppercase tracking-[0.2em] flex items-center gap-2 border-b-2 transition-all ${activeTab === 'reports' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
-            >
-              <BarChart3 className="w-4 h-4" />
-              Relatórios
-            </button>
+            <>
+              <button
+                onClick={() => setActiveTab('reports')}
+                className={`py-4 text-xs font-black uppercase tracking-[0.2em] flex items-center gap-2 border-b-2 transition-all ${activeTab === 'reports' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+              >
+                <BarChart3 className="w-4 h-4" />
+                Relatórios
+              </button>
+              <button
+                onClick={() => setActiveTab('users')}
+                className={`py-4 text-xs font-black uppercase tracking-[0.2em] flex items-center gap-2 border-b-2 transition-all ${activeTab === 'users' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+              >
+                <UserCog className="w-4 h-4" />
+                Usuários
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -784,7 +886,7 @@ const App: React.FC = () => {
                             <Search className="w-16 h-16 opacity-10" />
                             <div className="space-y-1">
                               <p className="font-bold text-slate-500 uppercase tracking-widest text-xs">Nenhum cliente encontrado</p>
-                              <p className="text-sm">Comece clicando em “Novo Cliente”.</p>
+                              <p className="text-sm">Comece clicando em "Novo Cliente".</p>
                             </div>
                           </div>
                         </td>
@@ -835,22 +937,252 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* resto da checklist / reports permanece igual ao seu original */}
-            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-              <p className="text-slate-500 text-sm">
-                Checklist e Relatórios continuam funcionando — agora usando os clientes carregados do Supabase.
-              </p>
+            <div className="bg-white p-2 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap gap-2">
+              <button
+                onClick={() => setChecklistSubFilter('all')}
+                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${checklistSubFilter === 'all' ? 'bg-slate-800 text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}
+              >
+                <Filter className="w-3.5 h-3.5" />
+                Todos <span className="opacity-40 ml-1">({checklistData.counts.all})</span>
+              </button>
+              <button
+                onClick={() => setChecklistSubFilter('pending')}
+                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${checklistSubFilter === 'pending' ? 'bg-yellow-500 text-white shadow-lg shadow-yellow-200' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}
+              >
+                <Clock className="w-3.5 h-3.5" />
+                Pendentes <span className="opacity-40 ml-1">({checklistData.counts.pending})</span>
+              </button>
+              <button
+                onClick={() => setChecklistSubFilter('not_done')}
+                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${checklistSubFilter === 'not_done' ? 'bg-red-500 text-white shadow-lg shadow-red-200' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}
+              >
+                <AlertCircle className="w-3.5 h-3.5" />
+                Faltaram <span className="opacity-40 ml-1">({checklistData.counts.not_done})</span>
+              </button>
+              <button
+                onClick={() => setChecklistSubFilter('rescheduled')}
+                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${checklistSubFilter === 'rescheduled' ? 'bg-blue-500 text-white shadow-lg shadow-blue-200' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}
+              >
+                <CalendarClock className="w-3.5 h-3.5" />
+                Remarcadas <span className="opacity-40 ml-1">({checklistData.counts.rescheduled})</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between px-2">
+                  <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 flex items-center gap-2">
+                    <Clock className="w-4 h-4" />
+                    Reuniões Pendentes ({checklistData.pending.length})
+                  </h3>
+                  <div className="h-px bg-slate-200 flex-1 ml-4" />
+                </div>
+
+                <div className="space-y-3">
+                  {checklistData.pending.length > 0 ? (
+                    checklistData.pending.map((item) => (
+                      <div key={item.client.id} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all group animate-in slide-in-from-left-2 duration-300">
+                        <div className="flex items-start justify-between">
+                          <div className="space-y-3 flex-1">
+                            <div className="flex items-center gap-3">
+                              <span className="bg-slate-800 text-white text-[10px] font-black w-6 h-6 flex items-center justify-center rounded-lg shadow-sm">
+                                {item.client.sequenceInMonth}
+                              </span>
+                              <h4 className="font-bold text-slate-800 uppercase text-sm tracking-tight">{item.client.name}</h4>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <span className="bg-yellow-50 text-yellow-700 text-[9px] font-black px-3 py-1 rounded-full border border-yellow-200 uppercase tracking-tighter shadow-sm">
+                                {item.meetingLabel}
+                              </span>
+                              <span className="bg-slate-100 text-slate-600 text-[9px] font-black px-3 py-1 rounded-full border border-slate-200 uppercase tracking-tighter shadow-sm">
+                                Ideal: Dia {item.client.startDate}
+                              </span>
+                              <span className={`text-[9px] font-black px-3 py-1 rounded-full border uppercase tracking-tighter shadow-sm ${item.status === MeetingStatus.RESCHEDULED ? 'bg-blue-50 text-blue-700 border-blue-200' : item.status === MeetingStatus.NOT_DONE ? 'bg-red-50 text-red-700 border-red-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
+                                Status: {STATUS_OPTIONS.find(o => o.value === item.status)?.label}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-col gap-2">
+                            <button
+                              onClick={() => updateMeetingData(item.client.id, checklistMonth, { status: MeetingStatus.DONE, customDate: new Date().getDate() })}
+                              className="bg-slate-50 hover:bg-green-500 hover:text-white text-slate-400 p-3 rounded-2xl transition-all border border-slate-100 shadow-sm active:scale-90"
+                              title="Marcar como Concluída"
+                            >
+                              <CheckCircle2 className="w-6 h-6" />
+                            </button>
+                            <button
+                              onClick={() => updateMeetingData(item.client.id, checklistMonth, { status: MeetingStatus.NOT_DONE })}
+                              className="bg-slate-50 hover:bg-red-500 hover:text-white text-slate-400 p-2 rounded-xl transition-all border border-slate-100 shadow-sm active:scale-90"
+                              title="Marcar Falta"
+                            >
+                              <XCircle className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="p-12 text-center bg-slate-100/30 rounded-3xl border-2 border-dashed border-slate-200">
+                      <p className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Nada pendente</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="flex items-center justify-between px-2">
+                  <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-green-500" />
+                    Concluídas no Mês ({checklistData.completed.length})
+                  </h3>
+                  <div className="h-px bg-slate-200 flex-1 ml-4" />
+                </div>
+
+                <div className="space-y-3 opacity-60 hover:opacity-100 transition-opacity">
+                  {checklistData.completed.length > 0 ? (
+                    checklistData.completed.map((item) => (
+                      <div key={item.client.id} className="bg-green-50/30 p-5 rounded-2xl border border-green-100/50 shadow-sm flex items-center justify-between animate-in fade-in duration-500">
+                        <div className="flex items-center gap-4">
+                          <div className="w-10 h-10 bg-green-500 text-white rounded-xl flex items-center justify-center shadow-lg shadow-green-100">
+                            <CheckCircle2 className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="font-bold text-slate-700 uppercase text-xs line-through decoration-slate-400">{item.client.name}</h4>
+                            <p className="text-[10px] font-black text-green-600 uppercase tracking-tighter">
+                              {item.meetingLabel} • Feito Dia {item.doneDate}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => updateMeetingData(item.client.id, checklistMonth, { status: MeetingStatus.PENDING })}
+                          className="text-slate-400 hover:text-red-500 p-2 transition-colors"
+                          title="Voltar para Pendente"
+                        >
+                          <XCircle className="w-5 h-5" />
+                        </button>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="p-12 text-center bg-white rounded-3xl border border-slate-200 shadow-inner">
+                      <p className="text-slate-400 text-sm mt-1">Nenhuma conclusão registrada ainda.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
-        ) : (
+        ) : activeTab === 'reports' ? (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
+            <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm space-y-8">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <h2 className="text-2xl font-black text-slate-800 flex items-center gap-3">
+                    <Trophy className="w-7 h-7 text-yellow-500" />
+                    Conversão de Contratos
+                  </h2>
+                  <p className="text-slate-500 font-medium">Histórico mensal de contratos encerrados (CLOSED_CONTRACT)</p>
+                </div>
+                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-center min-w-[150px]">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Total de Sucessos</p>
+                  <p className="text-3xl font-black text-slate-800">
+                    {reportData.reduce((acc, curr) => acc + curr.count, 0)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="relative h-80 w-full pt-8 px-4">
+                <div className="absolute inset-x-4 top-8 bottom-12 flex items-end justify-between gap-4">
+                  {reportData.map((data, idx) => {
+                    const heightPercent = (data.count / maxCount) * 100;
+                    return (
+                      <div key={idx} className="group relative flex flex-col items-center flex-1">
+                        <div className="absolute -top-10 opacity-0 group-hover:opacity-100 transition-all bg-slate-800 text-white text-[10px] font-black px-2 py-1 rounded shadow-lg -translate-y-2 group-hover:translate-y-0">
+                          {data.count} Contratos
+                        </div>
+
+                        <div
+                          style={{ height: `${heightPercent}%` }}
+                          className="w-full max-w-[40px] bg-gradient-to-t from-yellow-500 to-yellow-400 rounded-t-xl transition-all duration-700 shadow-lg shadow-yellow-500/20 group-hover:from-slate-800 group-hover:to-slate-700 group-hover:shadow-slate-800/20"
+                        />
+
+                        <div className="absolute top-[105%] flex flex-col items-center">
+                          <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter whitespace-nowrap overflow-hidden max-w-[60px] text-ellipsis">
+                            {data.label.split(' ')[0]}
+                          </span>
+                          <span className="text-[8px] font-bold text-slate-300">
+                            {data.label.split(' ')[1]}
+                          </span>
+                        </div>
+
+                        {data.count === 0 && (
+                          <div className="w-1 h-1 rounded-full bg-slate-200 mt-2" />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="absolute left-0 right-0 bottom-12 h-px bg-slate-100" />
+              </div>
+
+              <div className="pt-12 text-center">
+                <p className="text-xs font-medium text-slate-400 flex items-center justify-center gap-2">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  Este gráfico reflete o status 'Contrato Encerrado' aplicado em cada mês específico.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : activeTab === 'users' ? (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-              <p className="text-slate-500 text-sm">
-                Relatórios continuam funcionando — agora usando os clientes carregados do Supabase.
-              </p>
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-2xl font-black text-slate-800 flex items-center gap-3">
+                  <UserCog className="w-7 h-7 text-yellow-500" />
+                  Gerenciamento de Usuários
+                </h2>
+                {loadingUsers && <p className="text-slate-500 text-sm">Carregando...</p>}
+              </div>
+
+              <div className="space-y-4">
+                {users.map((user) => (
+                  <div key={user.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-200">
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 bg-slate-800 text-white rounded-xl flex items-center justify-center font-black text-sm">
+                        {user.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <p className="font-bold text-slate-800">{user.name}</p>
+                        <p className="text-sm text-slate-500">{user.email}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-2">
+                        <label className="text-sm font-medium text-slate-600">Ativo:</label>
+                        <input
+                          type="checkbox"
+                          checked={user.active}
+                          onChange={(e) => updateUser(user.id, { active: e.target.checked })}
+                          className="w-4 h-4 text-yellow-600 bg-slate-100 border-slate-300 rounded focus:ring-yellow-500"
+                        />
+                      </div>
+
+                      <select
+                        value={user.role}
+                        onChange={(e) => updateUser(user.id, { role: e.target.value as UserRole })}
+                        className="px-3 py-1 text-sm border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-yellow-500 outline-none"
+                      >
+                        <option value={UserRole.ADMIN}>Administrador</option>
+                        <option value={UserRole.ASSISTANT}>Assistente</option>
+                      </select>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
-        )}
+        ) : null}
       </main>
 
       {isFormOpen && (
