@@ -37,37 +37,84 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     checkUser();
   }, []);
 
-  const loadUserProfile = async (userId: string) => {
-    const { data: authData, error: authError } = await supabase.auth.getUser()
-    if (authError || !authData.user) {
-      setError('Erro ao validar login. Tente novamente.')
+const loadUserProfile = async (userId: string) => {
+  const { data: authData, error: authError } = await supabase.auth.getUser()
+  if (authError || !authData.user) {
+    setError('Erro ao validar login. Tente novamente.')
+    return
+  }
+
+  // 1) Tenta carregar profile
+  const { data: profile, error: profileFetchError } = await supabase
+    .from('profiles')
+    .select('id,name,role,active')
+    .eq('id', userId)
+    .single()
+
+  // 2) Se não existir profile, tenta criar automaticamente
+  if (profileFetchError || !profile) {
+    const fallbackName =
+      (authData.user.user_metadata?.name as string) ||
+      (authData.user.email ? authData.user.email.split('@')[0] : 'Usuário')
+
+    const { error: profileInsertError } = await supabase
+      .from('profiles')
+      .insert({
+        id: userId,
+        name: fallbackName,
+        role: 'ASSISTANT',
+        active: true
+      })
+
+    if (profileInsertError) {
+      console.error('Erro insert profiles:', profileInsertError)
+      setError('Erro no perfil. Avise o administrador para liberar seu acesso.')
       return
     }
 
-    const { data: profile, error } = await supabase
+    // tenta buscar de novo
+    const { data: profile2, error: profileFetchError2 } = await supabase
       .from('profiles')
       .select('id,name,role,active')
       .eq('id', userId)
       .single()
 
-    if (error || !profile) {
+    if (profileFetchError2 || !profile2) {
       setError('Erro ao carregar perfil. Tente novamente.')
       return
     }
 
-    if (!profile.active) {
+    if (!profile2.active) {
       setError('Sua conta foi desativada. Entre em contato com o administrador.')
       await supabase.auth.signOut()
       return
     }
 
-    const user: User = {
+    onLogin({
       id: userId,
-      name: profile.name || authData.user.user_metadata?.name || '',
+      name: profile2.name || fallbackName,
       email: authData.user.email || '',
       password: '',
-      role: (profile.role as UserRole) || UserRole.ASSISTANT
-    }
+      role: (profile2.role as UserRole) || UserRole.ASSISTANT
+    })
+    return
+  }
+
+  // 3) Profile existe: valida
+  if (!profile.active) {
+    setError('Sua conta foi desativada. Entre em contato com o administrador.')
+    await supabase.auth.signOut()
+    return
+  }
+
+  onLogin({
+    id: userId,
+    name: profile.name || (authData.user.user_metadata?.name as string) || '',
+    email: authData.user.email || '',
+    password: '',
+    role: (profile.role as UserRole) || UserRole.ASSISTANT
+  })
+}
 
     onLogin(user)
   };
