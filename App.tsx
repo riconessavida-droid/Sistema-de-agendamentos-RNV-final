@@ -748,7 +748,7 @@ const App: React.FC = () => {
 
                         return (
                           <tr key={client.id} className={`transition-colors group ${isFinalized ? 'bg-slate-50/50' : 'hover:bg-slate-50/30'}`}>
-                            <td className={`px-4 py-4 sticky left-0 z-10 w-80 shadow-[2px_0_5px_rgba(0,0,0,0.05)] border-r ${isConsultantRequired ? 'bg-orange-500 text-white' : isFinalized ? 'bg-slate-200 text-slate-500' : client.groupColor}`}>
+                            <td className={`px-4 py-4 sticky left-0 z-20 w-80 shadow-[2px_0_5px_rgba(0,0,0,0.05)] border-r ${isConsultantRequired ? 'bg-orange-500 text-white' : isFinalized ? 'bg-slate-200 text-slate-500' : client.groupColor}`}>
                               <div className="flex items-start gap-3">
                                 <div className="shrink-0 pt-0.5">
                                   <input
