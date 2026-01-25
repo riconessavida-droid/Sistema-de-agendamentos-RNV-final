@@ -103,8 +103,10 @@ const App: React.FC = () => {
   const [checklistSubFilter, setChecklistSubFilter] = useState<ChecklistSubFilter>('all');
 
   const [visibleMonths, setVisibleMonths] = useState<string[]>(() => {
-    return getNextMonths('2025-06', 8);
-  });
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}`;
+  return getNextMonths(currentMonth, 8);
+});
 
   // 1) Recarrega usuário da sessão local
   useEffect(() => {
@@ -724,17 +726,17 @@ const App: React.FC = () => {
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse">
                   <thead>
-                    <tr className="bg-slate-50 border-b">
-                      <th className="px-6 py-4 text-left text-xs font-black text-slate-400 uppercase tracking-wider sticky left-0 bg-slate-50 z-20 w-80 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">
-                        Identificação
-                      </th>
-                      {visibleMonths.map(m => (
-                        <th key={m} className="px-4 py-4 text-center text-[10px] font-black text-slate-400 uppercase tracking-wider border-l w-64 min-w-[240px]">
-                          {getMonthLabel(m)}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
+  <tr className="bg-slate-50 border-b sticky top-0 z-30">
+    <th className="px-6 py-4 text-left text-xs font-black text-slate-400 uppercase tracking-wider sticky left-0 bg-slate-50 z-40 w-80 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">
+      Identificação
+    </th>
+    {visibleMonths.map(m => (
+      <th key={m} className="px-4 py-4 text-center text-[10px] font-black text-slate-400 uppercase tracking-wider border-l w-64 min-w-[240px] sticky top-0 bg-slate-50 z-30">
+        {getMonthLabel(m)}
+      </th>
+    ))}
+  </tr>
+</thead>
 
                   <tbody className="divide-y divide-slate-200">
                     {filteredClients.length > 0 ? (
