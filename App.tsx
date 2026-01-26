@@ -105,12 +105,12 @@ const App: React.FC = () => {
   });
   const [checklistSubFilter, setChecklistSubFilter] = useState<ChecklistSubFilter>('all');
 
-  // ✅ CORREÇÃO 2: Planilha começa no mês atual (com meses anteriores disponíveis)
+  // ✅ CORREÇÃO 1: Planilha começa no mês atual (janeiro/2026) com rolagem para meses anteriores
   const [visibleMonths, setVisibleMonths] = useState<string[]>(() => {
     const now = new Date();
     const months: string[] = [];
     // 12 meses para trás + mês atual + 12 meses para frente
-    for (let i = -12; i &lt;= 12; i++) {
+    for (let i = -12; i <= 12; i++) {
       months.push(toMonthKey(addMonths(now, i)));
     }
     return months;
@@ -118,7 +118,7 @@ const App: React.FC = () => {
 
   const monthsScrollRef = useRef<HTMLDivElement | null>(null);
 
-  // ✅ CORREÇÃO 2: Scroll automático para o mês atual (funciona sempre)
+  // ✅ CORREÇÃO 1: Scroll automático para o mês atual (funciona sempre)
   useEffect(() => {
     if (activeTab !== 'overview') return;
     const container = monthsScrollRef.current;
@@ -259,7 +259,7 @@ const App: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const updateUser = async (userId: string, updates: Partial&lt;{ role: UserRole; active: boolean }>) => {
+  const updateUser = async (userId: string, updates: Partial<{ role: UserRole; active: boolean }>) => {
     const { error } = await supabase.from('profiles').update(updates).eq('id', userId);
 
     if (error) {
@@ -275,6 +275,7 @@ const App: React.FC = () => {
     return Object.values(client.statusByMonth).some(s => s.status === MeetingStatus.CLOSED_CONTRACT);
   };
 
+  // ✅ CORREÇÃO 2: Laranja quando CHEGAR no mês da 4ª reunião (M4 = start + 3)
   const isOrangeClient = (client: Client) => {
     if (isClientInactive(client)) return false;
 
@@ -282,6 +283,7 @@ const App: React.FC = () => {
     const month4 = cycleMonths[3]; // 4ª reunião
     const nowKey = toMonthKey(new Date());
 
+    // se já chegou no mês da 4ª reunião (ou passou), pinta de laranja
     return nowKey >= month4;
   };
 
@@ -379,7 +381,7 @@ const App: React.FC = () => {
   const updateMeetingData = async (
     clientId: string,
     monthYear: string,
-    updates: Partial&lt;{ status: MeetingStatus; customDate?: number }>
+    updates: Partial<{ status: MeetingStatus; customDate?: number }>
   ) => {
     const before = clients.find(c => c.id === clientId);
     if (!before) return;
@@ -460,8 +462,7 @@ const App: React.FC = () => {
         });
       }
       return acc;
-    }, [] as
-    }, [] as Array&lt;{
+    }, [] as Array<{
       client: Client;
       meetingIdx: number;
       meetingLabel: string;
@@ -470,7 +471,7 @@ const App: React.FC = () => {
     }>);
 
     const pendingAll = activeThisMonth.filter(item =>
-      item.status !== MeetingStatus.DONE &&
+           item.status !== MeetingStatus.DONE &&
       item.status !== MeetingStatus.CLOSED_CONTRACT
     );
 
@@ -497,7 +498,7 @@ const App: React.FC = () => {
     };
   }, [clients, checklistMonth, checklistSubFilter]);
 
-  // ✅ CORREÇÃO 1: Gráfico mostra quantidade de clientes FECHADOS por mês
+  // ✅ CORREÇÃO 2: Gráfico mostra quantidade de clientes FECHADOS por mês
   const reportData = useMemo(() => {
     const now = new Date();
     const months = getNextMonths(toMonthKey(now), 12);
@@ -560,7 +561,7 @@ const App: React.FC = () => {
           <button onClick={() => setActiveTab('overview')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'overview' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Visão Geral</button>
           <button onClick={() => setActiveTab('checklist')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'checklist' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Checklist Mensal</button>
           {currentUser.role === UserRole.ADMIN && (
-            &lt;>
+            <>
               <button onClick={() => setActiveTab('reports')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'reports' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Relatórios</button>
               <button onClick={() => setActiveTab('users')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'users' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Usuários</button>
             </>
@@ -570,7 +571,7 @@ const App: React.FC = () => {
 
       <main className="flex-1 max-w-[1600px] mx-auto px-4 py-8 space-y-6 w-full">
         {activeTab === 'overview' ? (
-          &lt;>
+          <>
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
               <div className="bg-white p-5 rounded-2xl border flex items-center gap-4 shadow-sm">
                 <div className="bg-green-50 p-3 rounded-xl text-green-600"><Users /></div>
@@ -682,4 +683,153 @@ const App: React.FC = () => {
                 <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">Controle de Reuniões de {getMonthLabel(checklistMonth)}</p>
               </div>
               <div className="flex items-center gap-3 bg-slate-100 p-2 rounded-xl">
-                <button onClick={() => { const d = addMonths(new Date(checklistMonth + '-01'), -1); setChecklistMonth(toMonthKey(d)); }} className="p-2 hover:bg-white rounded-lg transition-all shadow-sm"><Che
+                <button onClick={() => { const d = addMonths(new Date(checklistMonth + '-01'), -1); setChecklistMonth(toMonthKey(d)); }} className="p-2 hover:bg-white rounded-lg transition-all shadow-sm"><ChevronLeft className="w-5 h-5 text-slate-600" /></button>
+                <span className="font-black text-xs uppercase text-slate-700 min-w-[140px] text-center">{getMonthLabel(checklistMonth)}</span>
+                <button onClick
+                                  <button onClick={() => { const d = addMonths(new Date(checklistMonth + '-01'), 1); setChecklistMonth(toMonthKey(d)); }} className="p-2 hover:bg-white rounded-lg transition-all shadow-sm"><ChevronRight className="w-5 h-5 text-slate-600" /></button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="space-y-4">
+                <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2 px-2"><Clock className="w-4 h-4" /> Pendentes ({checklistData.pending.length})</h3>
+                {checklistData.pending.map((item: any) => (
+                  <div key={item.client.id} className="bg-white p-4 rounded-xl border shadow-sm flex items-center justify-between group hover:border-yellow-200 transition-all">
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 bg-slate-800 text-white rounded-lg flex items-center justify-center font-black text-xs">{item.client.sequenceInMonth}</div>
+                      <div>
+                        <p className="font-bold text-slate-800 text-sm uppercase">{item.client.name}</p>
+                        <p className="text-[10px] font-black text-yellow-600 uppercase">{item.meetingLabel} • Ideal: Dia {item.client.startDate}</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => updateMeetingData(item.client.id, checklistMonth, { status: MeetingStatus.DONE, customDate: new Date().getDate() })} className="p-2 bg-green-50 text-green-600 rounded-lg hover:bg-green-500 hover:text-white transition-all"><CheckCircle2 className="w-5 h-5" /></button>
+                      <button onClick={() => updateMeetingData(item.client.id, checklistMonth, { status: MeetingStatus.NOT_DONE })} className="p-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-500 hover:text-white transition-all"><XCircle className="w-5 h-5" /></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="space-y-4">
+                <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2 px-2"><CheckCircle2 className="w-4 h-4 text-green-500" /> Concluídas ({checklistData.completed.length})</h3>
+                {checklistData.completed.map((item: any) => (
+                  <div key={item.client.id} className="bg-green-50/50 p-4 rounded-xl border border-green-100 flex items-center justify-between opacity-80">
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 bg-green-500 text-white rounded-lg flex items-center justify-center"><CheckCircle2 className="w-5 h-5" /></div>
+                      <div>
+                        <p className="font-bold text-slate-700 text-sm uppercase line-through">{item.client.name}</p>
+                        <p className="text-[10px] font-black text-green-600 uppercase">{item.meetingLabel} • Feito Dia {item.doneDate}</p>
+                      </div>
+                    </div>
+                    <button onClick={() => updateMeetingData(item.client.id, checklistMonth, { status: MeetingStatus.PENDING })} className="text-slate-400 hover:text-red-500 transition-colors"><X className="w-5 h-5" /></button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : activeTab === 'reports' ? (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
+            <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm space-y-8">
+              <div className="flex items-center justify-between gap-6">
+                <div>
+                  <h2 className="text-2xl font-black text-slate-800 flex items-center gap-3"><Trophy className="text-yellow-500 w-7 h-7" /> Clientes Fechados por Mês</h2>
+                  <p className="text-slate-500 font-medium">Quantidade de clientes com contrato fechado por mês (Próximos 12 meses)</p>
+                </div>
+                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-center min-w-[150px]">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Total (12 Meses)</p>
+                  <p className="text-3xl font-black text-slate-800">{reportData.reduce((a, b) => a + b.count, 0)}</p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto pb-4">
+                <div className="relative h-80 w-[1200px] pt-8 px-4">
+                  <div className="absolute inset-x-4 top-8 bottom-12 flex items-end justify-between gap-4">
+                    {reportData.map((data, idx) => {
+                      const max = Math.max(...reportData.map(d => d.count), 5);
+                      const heightPercent = (data.count / max) * 100;
+                      return (
+                        <div key={idx} className="group relative flex flex-col items-center flex-1 min-w-[70px]">
+                          <div className="absolute -top-10 opacity-0 group-hover:opacity-100 transition-all bg-slate-800 text-white text-[10px] font-black px-2 py-1 rounded shadow-lg">
+                            {data.count} Clientes Fechados
+                          </div>
+                          <div
+                            style={{ height: `${heightPercent}%` }}
+                            className="w-full max-w-[40px] bg-gradient-to-t from-yellow-500 to-yellow-400 rounded-t-xl transition-all duration-700 shadow-lg shadow-yellow-500/20 group-hover:from-slate-800 group-hover:to-slate-700"
+                          />
+                          <div className="absolute top-[105%] flex flex-col items-center">
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">{data.label.split(' ')[0]}</span>
+                            <span className="text-[8px] font-bold text-slate-300">{data.label.split(' ')[1]}</span>
+                          </div>
+                          {data.count === 0 && <div className="w-1 h-1 rounded-full bg-slate-200 mt-2" />}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="absolute left-0 right-0 bottom-12 h-px bg-slate-100" />
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : activeTab === 'users' ? (
+          <div className="bg-white p-6 rounded-2xl border shadow-sm animate-in fade-in">
+            <h2 className="text-xl font-black mb-8 flex items-center gap-3 text-slate-800"><UserCog className="text-yellow-500 w-7 h-7" /> Gestão de Usuários</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {users.map(u => (
+                <div key={u.id} className="flex items-center justify-between p-5 bg-slate-50 rounded-2xl border hover:border-yellow-200 transition-all">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-slate-800 text-white rounded-xl flex items-center justify-center font-black text-lg shadow-sm">{u.name.charAt(0).toUpperCase()}</div>
+                    <div>
+                      <p className="font-bold text-slate-800 uppercase text-sm">{u.name}</p>
+                      <p className="text-xs text-slate-400 font-medium">{u.email}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm font-medium text-slate-600">Ativo:</label>
+                      <input type="checkbox" checked={u.active} onChange={async (e) => {
+                        const { error } = await supabase.from('profiles').update({ active: e.target.checked }).eq('id', u.id);
+                        if (!error) setUsers(prev => prev.map(usr => usr.id === u.id ? { ...usr, active: e.target.checked } : usr));
+                      }} className="w-4 h-4 accent-yellow-500" />
+                    </div>
+                    <select value={u.role} onChange={async (e) => {
+                      const { error } = await supabase.from('profiles').update({ role: e.target.value }).eq('id', u.id);
+                      if (!error) setUsers(prev => prev.map(usr => usr.id === u.id ? { ...usr, role: e.target.value as UserRole } : usr));
+                    }} className="px-3 py-1 text-sm border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-yellow-500 outline-none uppercase">
+                      <option value={UserRole.ADMIN}>Admin</option>
+                      <option value={UserRole.ASSISTANT}>Assistente</option>
+                    </select>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </main>
+
+      {isFormOpen && (
+        <ClientForm
+          onAdd={async (data) => {
+            const newClient = { ...data, id: crypto.randomUUID(), statusByMonth: {}, groupColor: GROUP_COLORS[clients.length % GROUP_COLORS.length] };
+            setClients(prev => [...prev, newClient]);
+            await supabase.from('clients').insert(clientToDb(newClient));
+            setIsFormOpen(false);
+          }}
+          onUpdate={async (id, data) => {
+            setClients(prev => prev.map(c => c.id === id ? { ...c, ...data } : c));
+            await supabase.from('clients').update(clientToDb(clients.find(c => c.id === id)!)).eq('id', id);
+            setIsFormOpen(false);
+            setEditingClient(null);
+          }}
+          onClose={() => { setIsFormOpen(false); setEditingClient(null); }}
+          clientToEdit={editingClient}
+          nextSequence={editingClient ? undefined : (clients.filter(c => c.startMonthYear === toMonthKey(new Date())).length + 1)}
+        />
+      )}
+      
+      <footer className="py-8 border-t bg-white mt-auto">
+        <p className="text-[10px] text-slate-400 font-black uppercase text-center tracking-[0.3em]">RNV Consultoria Financeira &copy; {new Date().getFullYear()}</p>
+      </footer>
+    </div>
+  );
+};
+
+export default App;
