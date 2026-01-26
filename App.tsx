@@ -235,7 +235,7 @@ const App: React.FC = () => {
     }
     const headers = ['ID', 'Nome', 'Telefone', 'Mês Início', 'Dia Início', 'Sequência', 'Cor', 'Status'];
     const rows = clients.map(c => [c.id, `"${c.name}"`, c.phoneDigits, c.startMonthYear, c.startDate, c.sequenceInMonth, c.groupColor, JSON.stringify(c.statusByMonth)]);
-    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const csvContent = [headers.join(','), ...rows.map(r => r.join(',')).join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
