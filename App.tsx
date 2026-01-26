@@ -477,4 +477,3 @@ const App: React.FC = () => {
     const filteredPending = pendingAll.filter(item => {
       if (checklistSubFilter === 'all') return true;
       if (checklistSubFilter ===
-          
