@@ -109,7 +109,7 @@ const App: React.FC = () => {
   const [visibleMonths, setVisibleMonths] = useState<string[]>(() => {
     const now = new Date();
     const months: string[] = [];
-    for (let i = -12; i &lt;= 12; i++) {
+    for (let i = -12; i <= 12; i++) {
       months.push(toMonthKey(addMonths(now, i)));
     }
     return months;
@@ -258,7 +258,7 @@ const App: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const updateUser = async (userId: string, updates: Partial&lt;{ role: UserRole; active: boolean }>) => {
+  const updateUser = async (userId: string, updates: Partial<{ role: UserRole; active: boolean }>) => {
     const { error } = await supabase.from('profiles').update(updates).eq('id', userId);
 
     if (error) {
@@ -380,7 +380,7 @@ const App: React.FC = () => {
   const updateMeetingData = async (
     clientId: string,
     monthYear: string,
-    updates: Partial&lt;{ status: MeetingStatus; customDate?: number }>
+    updates: Partial<{ status: MeetingStatus; customDate?: number }>
   ) => {
     const before = clients.find(c => c.id === clientId);
     if (!before) return;
@@ -461,7 +461,7 @@ const App: React.FC = () => {
         });
       }
       return acc;
-    }, [] as Array&lt;{
+    }, [] as Array<{
       client: Client;
       meetingIdx: number;
       meetingLabel: string;
@@ -476,4 +476,4 @@ const App: React.FC = () => {
 
     const filteredPending = pendingAll.filter(item => {
       if (checklistSubFilter === 'all') return true;
-      if (check
+      if (checklistSubFilter ===
