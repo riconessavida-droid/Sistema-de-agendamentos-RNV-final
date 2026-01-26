@@ -461,3 +461,225 @@ const App: React.FC = () => {
       }
       return acc;
     }, [] as
+    }, [] as Array&lt;{
+      client: Client;
+      meetingIdx: number;
+      meetingLabel: string;
+      status: MeetingStatus;
+      doneDate: number;
+    }>);
+
+    const pendingAll = activeThisMonth.filter(item =>
+      item.status !== MeetingStatus.DONE &&
+      item.status !== MeetingStatus.CLOSED_CONTRACT
+    );
+
+    const filteredPending = pendingAll.filter(item => {
+      if (checklistSubFilter === 'all') return true;
+      if (checklistSubFilter === 'pending') return item.status === MeetingStatus.PENDING;
+      if (checklistSubFilter === 'not_done') return item.status === MeetingStatus.NOT_DONE;
+      if (checklistSubFilter === 'rescheduled') return item.status === MeetingStatus.RESCHEDULED;
+      return true;
+    });
+
+    return {
+      pending: filteredPending,
+      completed: activeThisMonth.filter(item =>
+        item.status === MeetingStatus.DONE ||
+        item.status === MeetingStatus.CLOSED_CONTRACT
+      ),
+      counts: {
+        all: pendingAll.length,
+        pending: pendingAll.filter(i => i.status === MeetingStatus.PENDING).length,
+        not_done: pendingAll.filter(i => i.status === MeetingStatus.NOT_DONE).length,
+        rescheduled: pendingAll.filter(i => i.status === MeetingStatus.RESCHEDULED).length
+      }
+    };
+  }, [clients, checklistMonth, checklistSubFilter]);
+
+  // ✅ CORREÇÃO 1: Gráfico mostra quantidade de clientes FECHADOS por mês
+  const reportData = useMemo(() => {
+    const now = new Date();
+    const months = getNextMonths(toMonthKey(now), 12);
+    const map: Record<string, number> = {};
+    
+    // Conta clientes FECHADOS por mês (status CLOSED_CONTRACT)
+    clients.forEach(client => {
+      Object.entries(client.statusByMonth).forEach(([monthYear, statusData]) => {
+        if (statusData.status === MeetingStatus.CLOSED_CONTRACT) {
+          map[monthYear] = (map[monthYear] || 0) + 1;
+        }
+      });
+    });
+    
+    return months.map(m => ({ 
+      label: getMonthLabel(m), 
+      count: map[m] || 0 
+    }));
+  }, [clients]);
+
+  const stats = useMemo(() => {
+    const totalAtivos = clients.filter(c => !isClientInactive(c)).length;
+    const totalFinalizados = clients.filter(c => isClientInactive(c)).length;
+    const totalAtencao = clients.filter(c => isOrangeClient(c)).length;
+    const target = filterMonth === 'all' ? toMonthKey(new Date()) : filterMonth;
+    const entradas = clients.filter(c => c.startMonthYear === target).length;
+    return { 
+      totalAtivos, 
+      totalFinalizados, 
+      totalAtencao, 
+      entradas, 
+      labelEntradas: getMonthLabel(target) 
+    };
+  }, [clients, filterMonth]);
+
+  if (!currentUser) return <Auth onLogin={handleLogin} />;
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex flex-col">
+      <nav className="bg-white border-b sticky top-0 z-50 shadow-sm">
+        <div className="max-w-[1600px] mx-auto px-4 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="bg-yellow-500 p-2 rounded-lg"><TrendingUp className="text-white w-6 h-6" /></div>
+            <h1 className="text-xl font-bold text-slate-800">RNV Consultoria</h1>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="relative hidden md:block">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input placeholder="Pesquisar..." className="pl-9 pr-4 py-2 bg-slate-100 rounded-full text-sm outline-none w-64 focus:bg-white border focus:border-yellow-500" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+            </div>
+            <button onClick={exportClientsToCSV} className="p-2 bg-slate-100 rounded-lg hover:bg-slate-200" title="Exportar CSV"><Download className="w-5 h-5 text-slate-600" /></button>
+            <button onClick={() => { setEditingClient(null); setIsFormOpen(true); }} className="bg-yellow-500 text-white px-4 py-2 rounded-lg font-bold hover:bg-yellow-600 flex items-center gap-2"><Plus className="w-5 h-5" /> Novo Cliente</button>
+            <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-600"><LogOut className="w-5 h-5" /></button>
+          </div>
+        </div>
+      </nav>
+
+      <div className="bg-white border-b">
+        <div className="max-w-[1600px] mx-auto px-4 flex gap-8">
+          <button onClick={() => setActiveTab('overview')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'overview' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Visão Geral</button>
+          <button onClick={() => setActiveTab('checklist')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'checklist' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Checklist Mensal</button>
+          {currentUser.role === UserRole.ADMIN && (
+            &lt;>
+              <button onClick={() => setActiveTab('reports')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'reports' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Relatórios</button>
+              <button onClick={() => setActiveTab('users')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'users' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Usuários</button>
+            </>
+          )}
+        </div>
+      </div>
+
+      <main className="flex-1 max-w-[1600px] mx-auto px-4 py-8 space-y-6 w-full">
+        {activeTab === 'overview' ? (
+          &lt;>
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+              <div className="bg-white p-5 rounded-2xl border flex items-center gap-4 shadow-sm">
+                <div className="bg-green-50 p-3 rounded-xl text-green-600"><Users /></div>
+                <div><p className="text-[10px] font-black text-slate-400 uppercase">Ativos</p><p className="text-2xl font-black text-slate-800">{stats.totalAtivos}</p></div>
+              </div>
+              <div className="bg-white p-5 rounded-2xl border flex items-center gap-4 shadow-sm">
+                <div className="bg-orange-50 p-3 rounded-xl text-orange-600"><AlertCircle /></div>
+                <div><p className="text-[10px] font-black text-slate-400 uppercase">Atenção</p><p className="text-2xl font-black text-slate-800">{stats.totalAtencao}</p></div>
+              </div>
+              <div className="bg-white p-5 rounded-2xl border flex items-center gap-4 shadow-sm">
+                <div className="bg-blue-50 p-3 rounded-xl text-blue-600"><UserPlus /></div>
+                <div><p className="text-[10px] font-black text-slate-400 uppercase">{stats.labelEntradas}</p><p className="text-2xl font-black text-slate-800">{stats.entradas}</p></div>
+              </div>
+              <div className="bg-white p-5 rounded-2xl border flex items-center gap-4 shadow-sm">
+                <div className="bg-slate-50 p-3 rounded-xl text-slate-600"><CheckSquare /></div>
+                <div><p className="text-[10px] font-black text-slate-400 uppercase">Finalizados</p><p className="text-2xl font-black text-slate-800">{stats.totalFinalizados}</p></div>
+              </div>
+            </div>
+
+            <div className="bg-white p-4 rounded-xl border shadow-sm space-y-4">
+              <div className="flex flex-wrap gap-2 items-center">
+                <span className="text-[10px] font-black text-slate-400 uppercase mr-2">Filtrar Status:</span>
+                <button onClick={() => setStatusFilter('active')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'active' ? 'bg-green-600 text-white border-green-700 shadow-md' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Ativos</button>
+                <button onClick={() => setStatusFilter('needs_attention')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'needs_attention' ? 'bg-orange-500 text-white border-orange-600 shadow-md' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Atenção</button>
+                <button onClick={() => setStatusFilter('finalized')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'finalized' ? 'bg-slate-800 text-white border-slate-900 shadow-md' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Finalizados</button>
+                <button onClick={() => setStatusFilter('all')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'all' ? 'bg-slate-200 text-slate-700 border-slate-300' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Todos</button>
+              </div>
+            </div>
+
+            <RemindersPanel clients={clients.filter(c => !isClientInactive(c))} />
+
+            <div className="bg-white border rounded-2xl shadow-xl overflow-hidden">
+              <div className="p-4 border-b bg-slate-50 flex items-center justify-between">
+                <h2 className="font-bold text-slate-800 uppercase text-xs tracking-widest">Planilha Operacional RNV</h2>
+                <button onClick={addMoreMonth} className="text-[10px] font-black text-yellow-600 uppercase bg-yellow-50 px-3 py-1.5 rounded-lg hover:bg-yellow-100 transition-colors">Ver Mais Meses</button>
+              </div>
+
+              <div className="max-h-[70vh] overflow-auto relative" ref={monthsScrollRef}>
+                <table className="w-full border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b sticky top-0 z-30">
+                      <th className="px-6 py-4 text-left text-xs font-black text-slate-400 uppercase sticky left-0 bg-slate-50 z-40 w-80 shadow-md">Identificação</th>
+                      {visibleMonths.map(m => (
+                        <th key={m} data-month={m} className="px-4 py-4 text-center text-[10px] font-black text-slate-400 uppercase border-l w-64 min-w-[240px] sticky top-0 bg-slate-50 z-30">{getMonthLabel(m)}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {filteredClients.map(client => {
+                      const cycle = getNextMonths(client.startMonthYear, 5);
+                      const inactive = isClientInactive(client);
+                      const orange = isOrangeClient(client);
+                      return (
+                        <tr key={client.id} className={`hover:bg-slate-50/50 transition-colors ${inactive ? 'bg-slate-50/50' : ''}`}>
+                          <td className={`px-4 py-4 sticky left-0 z-20 w-80 border-r shadow-sm transition-colors ${orange ? 'bg-orange-500 text-white' : inactive ? 'bg-slate-200 text-slate-500' : client.groupColor}`}>
+                            <div className="flex items-start gap-3">
+                              <input type="number" value={client.sequenceInMonth} onChange={e => updateClientSequence(client.id, parseInt(e.target.value) || 1)} className={`w-10 h-10 rounded-xl text-center font-black outline-none transition-all ${orange ? 'bg-white/20 text-white' : 'bg-slate-800 text-white'}`} />
+                              <div className="flex-1 min-w-0">
+                                <p className={`font-bold truncate text-sm uppercase ${inactive ? 'line-through opacity-50' : ''}`}>{client.name}</p>
+                                <p className={`text-[10px] font-black opacity-70`}>TEL: {client.phoneDigits}</p>
+                                {orange && <span className="text-[8px] font-black bg-white/20 px-2 py-0.5 rounded-full uppercase mt-1 inline-block">Atenção Necessária</span>}
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <button onClick={() => handleEditClick(client)} className="p-1 hover:scale-110 transition-transform"><Pencil className="w-4 h-4" /></button>
+                                <button onClick={() => deleteClient(client.id)} className="p-1 hover:scale-110 transition-transform"><Trash2 className="w-4 h-4" /></button>
+                              </div>
+                            </div>
+                          </td>
+                          {visibleMonths.map(m => {
+                            const cycleIdx = cycle.indexOf(m);
+                            const s = client.statusByMonth[m];
+                            return (
+                              <td key={m} className={`px-4 py-4 border-l text-center ${cycleIdx !== -1 ? 'bg-white' : 'bg-slate-50/30 opacity-30'}`}>
+                                {cycleIdx !== -1 && (
+                                  <div className="flex flex-col gap-2">
+                                    <div className="flex justify-between text-[9px] font-black text-slate-400 uppercase">
+                                      <span>{MEETING_LABEL_TEXTS[cycleIdx]}</span>
+                                      <span className="bg-yellow-50 text-yellow-700 px-1.5 rounded">Dia {client.startDate}</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <button onClick={() => updateMeetingData(client.id, m, { status: s?.status === MeetingStatus.NOT_DONE ? MeetingStatus.PENDING : MeetingStatus.NOT_DONE })} className={`w-5 h-5 rounded-full border transition-all ${s?.status === MeetingStatus.NOT_DONE ? 'bg-red-500 border-red-600 scale-110 shadow-sm' : 'bg-white hover:border-red-300'}`} />
+                                      <div className="flex-1 bg-slate-50 rounded border px-2 py-1 flex justify-between items-center">
+                                        <span className="text-[8px] font-black text-slate-400">DIA:</span>
+                                        <input type="number" value={s?.customDate || ''} onChange={e => updateMeetingData(client.id, m, { customDate: parseInt(e.target.value) || undefined })} className="w-8 bg-transparent text-center font-black text-xs outline-none" />
+                                      </div>
+                                      <button onClick={() => updateMeetingData(client.id, m, { status: s?.status === MeetingStatus.DONE ? MeetingStatus.PENDING : MeetingStatus.DONE })} className={`w-5 h-5 rounded-full border transition-all ${s?.status === MeetingStatus.DONE ? 'bg-green-500 border-green-600 scale-110 shadow-sm' : 'bg-white hover:border-green-300'}`} />
+                                    </div>
+                                    <select value={s?.status || MeetingStatus.PENDING} onChange={e => updateMeetingData(client.id, m, { status: e.target.value as MeetingStatus })} className={`text-[9px] font-black border rounded p-1 outline-none transition-colors ${s?.status === MeetingStatus.RESCHEDULED ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white'}`}>
+                                      {STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                    </select>
+                                  </div>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
+        ) : activeTab === 'checklist' ? (
+          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
+            <div className="bg-white p-6 rounded-2xl border flex items-center justify-between shadow-sm">
+              <div>
+                <h2 className="text-xl font-black flex items-center gap-3 text-slate-800"><ClipboardCheck className="text-yellow-500 w-7 h-7" /> Checklist Mensal</h2>
+                <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">Controle de Reuniões de {getMonthLabel(checklistMonth)}</p>
+              </div>
+              <div className="flex items-center gap-3 bg-slate-100 p-2 rounded-xl">
+                <button onClick={() => { const d = addMonths(new Date(checklistMonth + '-01'), -1); setChecklistMonth(toMonthKey(d)); }} className="p-2 hover:bg-white rounded-lg transition-all shadow-sm"><Che
