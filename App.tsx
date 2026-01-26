@@ -105,7 +105,7 @@ const App: React.FC = () => {
   });
   const [checklistSubFilter, setChecklistSubFilter] = useState<ChecklistSubFilter>('all');
 
-  // ✅ Meses: 12 para trás + 12 para frente
+  // ✅ CORREÇÃO 1: Meses começam no mês atual
   const [visibleMonths, setVisibleMonths] = useState<string[]>(() => {
     const now = new Date();
     const months: string[] = [];
@@ -117,7 +117,7 @@ const App: React.FC = () => {
 
   const monthsScrollRef = useRef<HTMLDivElement | null>(null);
 
-  // ✅ CORREÇÃO 1: sempre iniciar no mês atual (SEM depender de querySelector/data-month)
+  // ✅ CORREÇÃO 1: Scroll automático para o mês atual (funciona sempre)
   useEffect(() => {
     if (activeTab !== 'overview') return;
     const container = monthsScrollRef.current;
@@ -127,10 +127,8 @@ const App: React.FC = () => {
     const idx = visibleMonths.indexOf(nowKey);
     if (idx === -1) return;
 
-    // largura aproximada de cada coluna de mês (min-w-[240px] no th)
+    // Largura fixa de cada coluna de mês (240px)
     const monthColWidth = 240;
-
-    // tenta centralizar o mês atual no viewport horizontal
     const targetLeft = idx * monthColWidth - Math.max(0, container.clientWidth / 2 - monthColWidth / 2);
 
     const run = () => {
@@ -138,7 +136,7 @@ const App: React.FC = () => {
     };
 
     run();
-    const t = window.setTimeout(run, 250);
+    const t = window.setTimeout(run, 300);
     return () => window.clearTimeout(t);
   }, [activeTab, visibleMonths]);
 
@@ -345,4 +343,137 @@ const App: React.FC = () => {
     const before = clients.find(c => c.id === id);
     if (!before) return;
 
-    const updated = clients.map(c => (c.id === id ? { ...c, sequenceInMonth: newSequence } 
+    const updated = clients.map(c => (c.id === id ? { ...c, sequenceInMonth: newSequence } : c));
+    setClients(updated);
+
+    const after = updated.find(c => c.id === id)!;
+
+    const { error } = await supabase.from('clients').update({ sequence_in_month: after.sequenceInMonth }).eq('id', id);
+
+    if (error) {
+      console.error('Erro ao atualizar sequence:', error);
+      setClients(prev => prev.map(c => (c.id === id ? before : c)));
+      window.alert(`Erro ao atualizar sequência no Supabase: ${error.message}`);
+    }
+  };
+
+  const deleteClient = async (id: string) => {
+    if (window.confirm('Tem certeza que deseja excluir este cliente permanentemente?')) {
+      const before = clients;
+      setClients(prev => prev.filter(c => c.id !== id));
+
+      const { error } = await supabase.from('clients').delete().eq('id', id);
+
+      if (error) {
+        console.error('Erro ao deletar client:', error);
+        setClients(before);
+        window.alert(`Erro ao excluir cliente no Supabase: ${error.message}`);
+      }
+    }
+  };
+
+  const handleEditClick = (client: Client) => {
+    setEditingClient(client);
+    setIsFormOpen(true);
+  };
+
+  const updateMeetingData = async (
+    clientId: string,
+    monthYear: string,
+    updates: Partial<{ status: MeetingStatus; customDate?: number }>
+  ) => {
+    const before = clients.find(c => c.id === clientId);
+    if (!before) return;
+
+    const currentData = before.statusByMonth[monthYear] || { status: MeetingStatus.PENDING };
+
+    const afterClient: Client = {
+      ...before,
+      statusByMonth: {
+        ...before.statusByMonth,
+        [monthYear]: { ...currentData, ...updates }
+      }
+    };
+
+    setClients(prev => prev.map(c => (c.id === clientId ? afterClient : c)));
+
+    const { error } = await supabase
+      .from('clients')
+      .update({ status_by_month: afterClient.statusByMonth })
+      .eq('id', clientId);
+
+    if (error) {
+      console.error('Erro ao atualizar status_by_month:', error);
+      setClients(prev => prev.map(c => (c.id === clientId ? before : c)));
+      window.alert(`Erro ao salvar status no Supabase: ${error.message}`);
+    }
+  };
+
+  const addMoreMonth = () => {
+    const last = visibleMonths[visibleMonths.length - 1];
+    const next = getNextMonths(last, 2)[1];
+    setVisibleMonths(prev => [...prev, next]);
+  };
+
+  const availableMonths = useMemo(() => {
+    const months = new Set<string>();
+    clients.forEach(c => months.add(c.startMonthYear));
+    return Array.from(months).sort();
+  }, [clients]);
+
+  const filteredClients = useMemo(() => {
+    return clients
+      .filter(c => {
+        const matchesSearch = c.name.toLowerCase().includes(searchTerm.toLowerCase()) || c.phoneDigits.includes(searchTerm);
+
+        const matchesMonth = filterMonth === 'all' || c.startMonthYear === filterMonth;
+
+        const inactive = isClientInactive(c);
+        const orange = isOrangeClient(c);
+        let matchesStatus = true;
+        if (statusFilter === 'active') matchesStatus = !inactive;
+        else if (statusFilter === 'finalized') matchesStatus = inactive;
+        else if (statusFilter === 'needs_attention') matchesStatus = orange;
+
+        return matchesSearch && matchesMonth && matchesStatus;
+      })
+      .sort((a, b) => {
+        if (a.startMonthYear !== b.startMonthYear) return a.startMonthYear.localeCompare(b.startMonthYear);
+        return (a.sequenceInMonth || 0) - (b.sequenceInMonth || 0);
+      });
+  }, [clients, searchTerm, filterMonth, statusFilter]);
+
+  const checklistData = useMemo(() => {
+    const activeClients = clients.filter(c => !isClientInactive(c));
+
+    const activeThisMonth = activeClients.reduce((acc, client) => {
+      const cycleMonths = getNextMonths(client.startMonthYear, 5);
+      const meetingIdx = cycleMonths.indexOf(checklistMonth);
+
+      if (meetingIdx !== -1) {
+        const statusData = client.statusByMonth[checklistMonth];
+        acc.push({
+          client,
+          meetingIdx,
+          meetingLabel: MEETING_LABEL_TEXTS[meetingIdx],
+          status: statusData?.status || MeetingStatus.PENDING,
+          doneDate: statusData?.customDate || client.startDate
+        });
+      }
+      return acc;
+    }, [] as Array<{
+      client: Client;
+      meetingIdx: number;
+      meetingLabel: string;
+      status: MeetingStatus;
+      doneDate: number;
+    }>);
+
+    const pendingAll = activeThisMonth.filter(item =>
+      item.status !== MeetingStatus.DONE &&
+      item.status !== MeetingStatus.CLOSED_CONTRACT
+    );
+
+    const filteredPending = pendingAll.filter(item => {
+      if (checklistSubFilter === 'all') return true;
+      if (check
