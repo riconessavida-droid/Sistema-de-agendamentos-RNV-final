@@ -380,7 +380,7 @@ const App: React.FC = () => {
   const updateMeetingData = async (
     clientId: string,
     monthYear: string,
-    updates: Partial<{ status: MeetingStatus; customDate?: number }>
+    updates: Partial&lt;{ status: MeetingStatus; customDate?: number }>
   ) => {
     const before = clients.find(c => c.id === clientId);
     if (!before) return;
@@ -461,7 +461,7 @@ const App: React.FC = () => {
         });
       }
       return acc;
-    }, [] as Array<{
+    }, [] as Array&lt;{
       client: Client;
       meetingIdx: number;
       meetingLabel: string;
