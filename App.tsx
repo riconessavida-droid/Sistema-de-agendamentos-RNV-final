@@ -49,7 +49,7 @@ const addMonths = (base: Date, delta: number) => new Date(base.getFullYear(), ba
 
 type TabType = 'overview' | 'checklist' | 'reports' | 'users';
 type ChecklistSubFilter = 'all' | 'pending' | 'not_done' | 'rescheduled';
-type StatusFilter = 'all' | 'active' | 'finalized';
+type StatusFilter = 'all' | 'active' | 'finalized' | 'needs_attention';
 
 type DbClientRow = {
   id: string;
@@ -254,6 +254,27 @@ const App: React.FC = () => {
 
   const isClientInactive = (client: Client) => Object.values(client.statusByMonth).some(s => s.status === MeetingStatus.CLOSED_CONTRACT);
 
+  // ✅ MELHORIA: Verificar se cliente precisa de atenção (reunião pendente há mais de 4 meses)
+  const needsAttention = (client: Client) => {
+    const now = new Date();
+    const clientCycleMonths = getNextMonths(client.startMonthYear, 5);
+    
+    for (const monthYear of clientCycleMonths) {
+      const statusData = client.statusByMonth[monthYear];
+      if (!statusData || (statusData.status !== MeetingStatus.DONE && statusData.status !== MeetingStatus.CLOSED_CONTRACT)) {
+        // Data ideal da reunião: startDate do mês da reunião
+        const [year, month] = monthYear.split('-').map(Number);
+        const meetingDate = new Date(year, month - 1, client.startDate);
+        const fourMonthsLater = addMonths(meetingDate, 4);
+        
+        if (now >= fourMonthsLater) {
+          return true; // Reunião pendente há mais de 4 meses
+        }
+      }
+    }
+    return false;
+  };
+
   const getNextSequenceForMonth = (monthYear: string) => {
     const monthClients = clients.filter(c => c.startMonthYear === monthYear);
     if (monthClients.length === 0) return 1;
@@ -315,7 +336,11 @@ const App: React.FC = () => {
         const matchesSearch = c.name.toLowerCase().includes(searchTerm.toLowerCase()) || c.phoneDigits.includes(searchTerm);
         const matchesMonth = filterMonth === 'all' || c.startMonthYear === filterMonth;
         const inactive = isClientInactive(c);
-        const matchesStatus = statusFilter === 'all' ? true : statusFilter === 'active' ? !inactive : inactive;
+        const attention = needsAttention(c);
+        let matchesStatus = true;
+        if (statusFilter === 'active') matchesStatus = !inactive;
+        else if (statusFilter === 'finalized') matchesStatus = inactive;
+        else if (statusFilter === 'needs_attention') matchesStatus = attention;
         return matchesSearch && matchesMonth && matchesStatus;
       })
       .sort((a, b) => a.startMonthYear.localeCompare(b.startMonthYear) || (a.sequenceInMonth - b.sequenceInMonth));
@@ -393,7 +418,7 @@ const App: React.FC = () => {
       <main className="flex-1 max-w-[1600px] mx-auto px-4 py-8 space-y-6 w-full">
         {activeTab === 'overview' ? (
           <>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
               <div className="bg-white p-5 rounded-2xl border flex items-center gap-4 shadow-sm">
                 <div className="bg-green-50 p-3 rounded-xl text-green-600"><Users /></div>
                 <div><p className="text-[10px] font-black text-slate-400 uppercase">Ativos</p><p className="text-2xl font-black">{stats.totalAtivos}</p></div>
@@ -406,9 +431,80 @@ const App: React.FC = () => {
                 <div className="bg-blue-50 p-3 rounded-xl text-blue-600"><UserPlus /></div>
                 <div><p className="text-[10px] font-black text-slate-400 uppercase">{stats.labelEntradas}</p><p className="text-2xl font-black">{stats.entradasNoMes}</p></div>
               </div>
+              <div className="bg-white p-5 rounded-2xl border flex items-center gap-4 shadow-sm">
+                <div className="bg-orange-50 p-3 rounded-xl text-orange-600"><AlertCircle /></div>
+                <div><p className="text-[10px] font-black text-slate-400 uppercase">Precisam Atenção</p><p className="text-2xl font-black">{clients.filter(c => needsAttention(c)).length}</p></div>
+              </div>
             </div>
 
             <RemindersPanel clients={clients.filter(c => !isClientInactive(c))} />
+
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-6">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between border-b pb-2 border-slate-100">
+                  <h3 className="text-xs font-black text-slate-500 flex items-center gap-2 uppercase tracking-widest">
+                    <Filter className="w-3.5 h-3.5" /> Filtrar por Mês de Início
+                  </h3>
+                  {filterMonth !== 'all' && (
+                    <button
+                      onClick={() => setFilterMonth('all')}
+                      className="text-[10px] font-bold text-red-500 hover:text-red-600 flex items-center gap-1 uppercase"
+                    >
+                      Limpar <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setFilterMonth('all')}
+                    className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest transition-all border ${filterMonth === 'all' ? 'bg-yellow-500 border-yellow-600 text-white shadow-md' : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100'}`}
+                  >
+                    Todos os Meses
+                  </button>
+                  {availableMonths.map(m => (
+                    <button
+                      key={m}
+                      onClick={() => setFilterMonth(m)}
+                      className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest transition-all border ${filterMonth === m ? 'bg-yellow-500 border-yellow-600 text-white shadow-md' : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100'}`}
+                    >
+                      {getMonthLabel(m)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <h3 className="text-xs font-black text-slate-500 flex items-center gap-2 uppercase tracking-widest border-b pb-2 border-slate-100">
+                  <ClipboardCheck className="w-3.5 h-3.5" /> Filtro de Status do Cliente
+                </h3>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setStatusFilter('all')}
+                    className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 border ${statusFilter === 'all' ? 'bg-slate-800 border-slate-900 text-white shadow-lg shadow-slate-200' : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100'}`}
+                  >
+                    <Users className="w-3.5 h-3.5" /> Todos
+                  </button>
+                  <button
+                    onClick={() => setStatusFilter('active')}
+                    className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 border ${statusFilter === 'active' ? 'bg-green-600 border-green-700 text-white shadow-lg shadow-green-200' : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100'}`}
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Ativos
+                  </button>
+                  <button
+                    onClick={() => setStatusFilter('finalized')}
+                    className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 border ${statusFilter === 'finalized' ? 'bg-blue-600 border-blue-700 text-white shadow-lg shadow-blue-200' : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100'}`}
+                  >
+                    <UserMinus className="w-3.5 h-3.5" /> Finalizados
+                  </button>
+                  <button
+                    onClick={() => setStatusFilter('needs_attention')}
+                    className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 border ${statusFilter === 'needs_attention' ? 'bg-orange-600 border-orange-700 text-white shadow-lg shadow-orange-200' : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100'}`}
+                  >
+                    <AlertCircle className="w-3.5 h-3.5" /> Precisam Atenção
+                  </button>
+                </div>
+              </div>
+            </div>
 
             <div className="bg-white border border-slate-200 rounded-2xl shadow-xl overflow-hidden">
               <div className="p-4 border-b bg-slate-50 flex items-center justify-between">
@@ -433,14 +529,16 @@ const App: React.FC = () => {
                     {filteredClients.map(client => {
                       const cycle = getNextMonths(client.startMonthYear, 5);
                       const inactive = isClientInactive(client);
+                      const attention = needsAttention(client);
                       return (
                         <tr key={client.id} className={inactive ? 'bg-slate-50/50' : ''}>
-                          <td className={`px-4 py-4 sticky left-0 z-20 w-80 border-r shadow-sm ${inactive ? 'bg-slate-200' : client.groupColor}`}>
+                          <td className={`px-4 py-4 sticky left-0 z-20 w-80 border-r shadow-sm ${attention ? 'bg-orange-500 text-white' : inactive ? 'bg-slate-200' : client.groupColor}`}>
                             <div className="flex items-start gap-3">
                               <input type="number" value={client.sequenceInMonth} onChange={e => updateClientSequence(client.id, parseInt(e.target.value) || 1)} className="w-10 h-10 rounded-xl bg-slate-800 text-white text-center font-black" />
                               <div className="flex-1 min-w-0">
                                 <p className={`font-bold truncate text-sm uppercase ${inactive ? 'line-through' : ''}`}>{client.name}</p>
                                 <p className="text-[10px] font-black opacity-60">TEL: {client.phoneDigits}</p>
+                                {attention && <p className="text-[8px] font-black bg-white/20 px-2 py-0.5 rounded-full uppercase tracking-widest mt-1">PRECISA ATENÇÃO</p>}
                               </div>
                               <div className="flex flex-col gap-1">
                                 <button onClick={() => handleEditClick(client)} className="p-1 hover:text-yellow-600"><Pencil className="w-4 h-4" /></button>
