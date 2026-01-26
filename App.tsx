@@ -101,7 +101,7 @@ const App: React.FC = () => {
   
   const monthsScrollRef = useRef<HTMLDivElement | null>(null);
 
-  // Range de meses: 12 passados e 12 futuros
+  // Range de meses: 12 passados + 12 futuros
   const [visibleMonths, setVisibleMonths] = useState<string[]>(() => {
     const now = new Date();
     const arr: string[] = [];
@@ -111,7 +111,7 @@ const App: React.FC = () => {
     return arr;
   });
 
-  // ✅ Lógica Laranja: Passou 4 meses da data ideal de qualquer reunião do ciclo
+  // Lógica Laranja: atraso de 4 meses em qualquer reunião do ciclo
   const checkIfNeedsAttention = (client: Client) => {
     const isFinalized = Object.values(client.statusByMonth).some(s => s.status === MeetingStatus.CLOSED_CONTRACT);
     if (isFinalized) return false;
@@ -131,22 +131,23 @@ const App: React.FC = () => {
     return false;
   };
 
-  // ✅ Auto-scroll para o mês atual
+  // Auto-scroll para o mês atual
   useEffect(() => {
-    if (activeTab !== 'overview' || !monthsScrollRef.current) return;
-    const nowKey = toMonthKey(new Date());
+    if (activeTab !== 'overview') return;
     const container = monthsScrollRef.current;
-    
-    const performScroll = () => {
+    if (!container) return;
+
+    const nowKey = toMonthKey(new Date());
+
+    const run = () => {
       const th = container.querySelector(`[data-month="${nowKey}"]`) as HTMLElement | null;
-      if (th) {
-        const left = th.offsetLeft - (container.clientWidth / 2) + (th.clientWidth / 2);
-        container.scrollLeft = left;
-      }
+      if (!th) return;
+      const left = th.offsetLeft - (container.clientWidth / 2) + (th.clientWidth / 2);
+      container.scrollLeft = left;
     };
 
-    performScroll();
-    const t = setTimeout(performScroll, 300);
+    run();
+    const t = setTimeout(run, 300);
     return () => clearTimeout(t);
   }, [activeTab, visibleMonths]);
 
@@ -229,23 +230,60 @@ const App: React.FC = () => {
   }, [clients, filterMonth]);
 
   const checklistData = useMemo(() => {
-    const activeOnes = clients.filter(c => !isClientInactive(c)).reduce((acc, client) => {
-      const cycle = getNextMonths(client.startMonthYear, 5);
-      const idx = cycle.indexOf(checklistMonth);
-      if (idx !== -1) {
-        const s = client.statusByMonth[checklistMonth];
-        acc.push({ client, meetingLabel: MEETING_LABEL_TEXTS[idx], status: s?.status || MeetingStatus.PENDING, doneDate: s?.customDate || client.startDate });
+    const activeClients = clients.filter(c => !isClientInactive(c));
+
+    const activeThisMonth = activeClients.reduce((acc, client) => {
+      const cycleMonths = getNextMonths(client.startMonthYear, 5);
+      const meetingIdx = cycleMonths.indexOf(checklistMonth);
+
+      if (meetingIdx !== -1) {
+        const statusData = client.statusByMonth[checklistMonth];
+        acc.push({
+          client,
+          meetingIdx,
+          meetingLabel: MEETING_LABEL_TEXTS[meetingIdx],
+          status: statusData?.status || MeetingStatus.PENDING,
+          doneDate: statusData?.customDate || client.startDate
+        });
       }
       return acc;
-    }, [] as any[]);
+    }, [] as Array<{
+      client: Client;
+      meetingIdx: number;
+      meetingLabel: string;
+      status: MeetingStatus;
+      doneDate: number;
+    }>);
 
-    const pending = activeOnes.filter(i => i.status !== MeetingStatus.DONE && i.status !== MeetingStatus.CLOSED_CONTRACT)
-      .filter(i => checklistSubFilter === 'all' || i.status === checklistSubFilter);
+    const pendingAll = activeThisMonth.filter(item =>
+      item.status !== MeetingStatus.DONE &&
+      item.status !== MeetingStatus.CLOSED_CONTRACT
+    );
 
-    return { pending, completed: activeOnes.filter(i => i.status === MeetingStatus.DONE || i.status === MeetingStatus.CLOSED_CONTRACT) };
+    const filteredPending = pendingAll.filter(item => {
+      if (checklistSubFilter === 'all') return true;
+      if (checklistSubFilter === 'pending') return item.status === MeetingStatus.PENDING;
+      if (checklistSubFilter === 'not_done') return item.status === MeetingStatus.NOT_DONE;
+      if (checklistSubFilter === 'rescheduled') return item.status === MeetingStatus.RESCHEDULED;
+      return true;
+    });
+
+    return {
+      pending: filteredPending,
+      completed: activeThisMonth.filter(item =>
+        item.status === MeetingStatus.DONE ||
+        item.status === MeetingStatus.CLOSED_CONTRACT
+      ),
+      counts: {
+        all: pendingAll.length,
+        pending: pendingAll.filter(i => i.status === MeetingStatus.PENDING).length,
+        not_done: pendingAll.filter(i => i.status === MeetingStatus.NOT_DONE).length,
+        rescheduled: pendingAll.filter(i => i.status === MeetingStatus.RESCHEDULED).length
+      }
+    };
   }, [clients, checklistMonth, checklistSubFilter]);
 
-  // ✅ Relatório Corrigido: Entradas de Clientes nos próximos 12 meses
+  // Relatório: Entradas de Clientes nos próximos 12 meses
   const reportData = useMemo(() => {
     const now = new Date();
     const months = getNextMonths(toMonthKey(now), 12);
@@ -403,7 +441,7 @@ const App: React.FC = () => {
                                         <span className="text-[8px] font-black text-slate-400">DIA:</span>
                                         <input type="number" value={s?.customDate || ''} onChange={e => updateMeetingData(client.id, m, { customDate: parseInt(e.target.value) || undefined })} className="w-8 bg-transparent text-center font-black text-xs outline-none" />
                                       </div>
-                                      <button onClick={() => updateMeetingData(client.id, m, { status: s?.status === MeetingStatus.DONE ? MeetingStatus.PENDING : MeetingStatus.DONE })} className={`w-5 h-5 rounded-full border transition-all ${s?.status === MeetingStatus.DONE ? 'bg-green-500 border-green-600 scale-110 shadow-sm' : 'bg-white hover:border-red-300'}`} />
+                                      <button onClick={() => updateMeetingData(client.id, m, { status: s?.status === MeetingStatus.DONE ? MeetingStatus.PENDING : MeetingStatus.DONE })} className={`w-5 h-5 rounded-full border transition-all ${s?.status === MeetingStatus.DONE ? 'bg-green-500 border-green-600 scale-110 shadow-sm' : 'bg-white hover:border-green-300'}`} />
                                     </div>
                                     <select value={s?.status || MeetingStatus.PENDING} onChange={e => updateMeetingData(client.id, m, { status: e.target.value as MeetingStatus })} className={`text-[9px] font-black border rounded p-1 outline-none transition-colors ${s?.status === MeetingStatus.RESCHEDULED ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white'}`}>
                                       {STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -528,22 +566,20 @@ const App: React.FC = () => {
                     </div>
                   </div>
                   <div className="flex items-center gap-4">
-                    <div className="flex flex-col items-end gap-2">
-                      <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Status / Cargo</span>
-                      <div className="flex items-center gap-3">
-                        <input type="checkbox" checked={u.active} onChange={async (e) => {
-                          const { error } = await supabase.from('profiles').update({ active: e.target.checked }).eq('id', u.id);
-                          if (!error) setUsers(prev => prev.map(usr => usr.id === u.id ? { ...usr, active: e.target.checked } : usr));
-                        }} className="w-4 h-4 accent-yellow-500" />
-                        <select value={u.role} onChange={async (e) => {
-                          const { error } = await supabase.from('profiles').update({ role: e.target.value }).eq('id', u.id);
-                          if (!error) setUsers(prev => prev.map(usr => usr.id === u.id ? { ...usr, role: e.target.value as UserRole } : usr));
-                        }} className="text-[10px] font-black border rounded-lg p-1.5 bg-white outline-none uppercase">
-                          <option value={UserRole.ADMIN}>Admin</option>
-                          <option value={UserRole.ASSISTANT}>Assistente</option>
-                        </select>
-                      </div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm font-medium text-slate-600">Ativo:</label>
+                      <input type="checkbox" checked={u.active} onChange={async (e) => {
+                        const { error } = await supabase.from('profiles').update({ active: e.target.checked }).eq('id', u.id);
+                        if (!error) setUsers(prev => prev.map(usr => usr.id === u.id ? { ...usr, active: e.target.checked } : usr));
+                      }} className="w-4 h-4 accent-yellow-500" />
                     </div>
+                    <select value={u.role} onChange={async (e) => {
+                      const { error } = await supabase.from('profiles').update({ role: e.target.value }).eq('id', u.id);
+                      if (!error) setUsers(prev => prev.map(usr => usr.id === u.id ? { ...usr, role: e.target.value as UserRole } : usr));
+                    }} className="px-3 py-1 text-sm border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-yellow-500 outline-none uppercase">
+                      <option value={UserRole.ADMIN}>Admin</option>
+                      <option value={UserRole.ASSISTANT}>Assistente</option>
+                    </select>
                   </div>
                 </div>
               ))}
