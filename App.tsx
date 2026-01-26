@@ -99,19 +99,24 @@ const App: React.FC = () => {
   const [checklistMonth, setChecklistMonth] = useState<string>(() => toMonthKey(new Date()));
   const [checklistSubFilter, setChecklistSubFilter] = useState<ChecklistSubFilter>('all');
 
-  // ✅ CORREÇÃO: Gera meses de 1 ano atrás até 1 ano à frente
+  // Mantemos a lista de meses ampla para permitir rolagem para o passado
   const [visibleMonths, setVisibleMonths] = useState<string[]>(() => {
     const now = new Date();
     const months: string[] = [];
-    for (let i = -12; i <= 12; i++) {
-      months.push(toMonthKey(addMonths(now, i)));
+    // Começa em Jan/2025 e vai até 12 meses após o atual
+    const start = new Date(2025, 0, 1);
+    const end = addMonths(now, 12);
+    let current = start;
+    while (current <= end) {
+      months.push(toMonthKey(current));
+      current = addMonths(current, 1);
     }
     return months;
   });
 
   const monthsScrollRef = useRef<HTMLDivElement | null>(null);
 
-  // ✅ CORREÇÃO: Scroll automático para o mês atual ao carregar
+  // ✅ CORREÇÃO 1: Scroll automático para o mês atual ao entrar na aba Visão Geral
   useEffect(() => {
     if (activeTab !== 'overview' || loadingClients) return;
     
@@ -123,12 +128,13 @@ const App: React.FC = () => {
       const idx = visibleMonths.indexOf(nowKey);
       if (idx === -1) return;
 
-      const monthColWidth = 240;
+      const monthColWidth = 240; // Largura da coluna no CSS
       const targetLeft = idx * monthColWidth - (container.clientWidth / 2 - monthColWidth / 2);
       container.scrollLeft = Math.max(0, targetLeft);
     };
 
-    const timer = setTimeout(scrollToCurrent, 500);
+    // Pequeno delay para garantir que a tabela renderizou
+    const timer = setTimeout(scrollToCurrent, 300);
     return () => clearTimeout(timer);
   }, [activeTab, visibleMonths, loadingClients]);
 
@@ -178,8 +184,7 @@ const App: React.FC = () => {
     setClients([]);
     setActiveTab('overview');
   };
-
-  const isClientInactive = (client: Client) => {
+    const isClientInactive = (client: Client) => {
     return Object.values(client.statusByMonth).some(s => s.status === MeetingStatus.CLOSED_CONTRACT);
   };
 
@@ -188,15 +193,14 @@ const App: React.FC = () => {
     const cycleMonths = getNextMonths(client.startMonthYear, 5);
     return toMonthKey(new Date()) >= cycleMonths[3];
   };
-    const updateMeetingData = async (clientId: string, monthYear: string, updates: any) => {
+
+  const updateMeetingData = async (clientId: string, monthYear: string, updates: any) => {
     const client = clients.find(c => c.id === clientId);
     if (!client) return;
-
     const newStatusByMonth = {
       ...client.statusByMonth,
       [monthYear]: { ...(client.statusByMonth[monthYear] || {}), ...updates }
     };
-
     setClients(prev => prev.map(c => c.id === clientId ? { ...c, statusByMonth: newStatusByMonth } : c));
     await supabase.from('clients').update({ status_by_month: newStatusByMonth }).eq('id', clientId);
   };
@@ -206,16 +210,22 @@ const App: React.FC = () => {
     await supabase.from('clients').update({ sequence_in_month: seq }).eq('id', id);
   };
 
+  const deleteClient = async (id: string) => {
+    if (!window.confirm('Excluir permanentemente?')) return;
+    setClients(prev => prev.filter(c => c.id !== id));
+    await supabase.from('clients').delete().eq('id', id);
+  };
+
   const filteredClients = useMemo(() => {
     return clients.filter(c => {
-      const matchesSearch = c.name.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesSearch = c.name.toLowerCase().includes(searchTerm.toLowerCase()) || c.phoneDigits.includes(searchTerm);
       const matchesMonth = filterMonth === 'all' || c.startMonthYear === filterMonth;
-      const inactive = isClientInactive(c);
-      if (statusFilter === 'active') return matchesSearch && matchesMonth && !inactive;
-      if (statusFilter === 'finalized') return matchesSearch && matchesMonth && inactive;
+      const inactive = isClientInactive(client);
+      if (statusFilter === 'active') return matchesSearch && matchesMonth && !isClientInactive(c);
+      if (statusFilter === 'finalized') return matchesSearch && matchesMonth && isClientInactive(c);
       if (statusFilter === 'needs_attention') return matchesSearch && matchesMonth && isOrangeClient(c);
       return matchesSearch && matchesMonth;
-    }).sort((a, b) => a.startMonthYear.localeCompare(b.startMonthYear) || a.sequenceInMonth - b.sequenceInMonth);
+    });
   }, [clients, searchTerm, filterMonth, statusFilter]);
 
   const checklistData = useMemo(() => {
@@ -235,7 +245,7 @@ const App: React.FC = () => {
     };
   }, [clients, checklistMonth, checklistSubFilter]);
 
-  // ✅ CORREÇÃO: Gráfico baseado em contratos FECHADOS no mês
+  // ✅ CORREÇÃO 2: Gráfico baseado em contratos FECHADOS no mês
   const reportData = useMemo(() => {
     const months = getNextMonths(toMonthKey(new Date()), 12);
     const map: Record<string, number> = {};
@@ -268,7 +278,7 @@ const App: React.FC = () => {
         </div>
         <div className="flex items-center gap-4">
           <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" /><input placeholder="Pesquisar..." className="pl-9 pr-4 py-2 bg-slate-100 rounded-full text-sm outline-none w-64 focus:bg-white border focus:border-yellow-500" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>
-          <button onClick={() => setIsFormOpen(true)} className="bg-yellow-500 text-white px-4 py-2 rounded-lg font-bold hover:bg-yellow-600 flex items-center gap-2"><Plus className="w-5 h-5" /> Novo Cliente</button>
+          <button onClick={() => { setEditingClient(null); setIsFormOpen(true); }} className="bg-yellow-500 text-white px-4 py-2 rounded-lg font-bold hover:bg-yellow-600 flex items-center gap-2"><Plus className="w-5 h-5" /> Novo Cliente</button>
           <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-600"><LogOut className="w-5 h-5" /></button>
         </div>
       </nav>
@@ -287,15 +297,17 @@ const App: React.FC = () => {
         {activeTab === 'overview' && (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-              <div className="bg-white p-5 rounded-2xl border shadow-sm">
-                <p className="text-[10px] font-black text-slate-400 uppercase">Ativos</p>
-                <p className="text-2xl font-black text-slate-800">{stats.totalAtivos}</p>
+              <div className="bg-white p-5 rounded-2xl border shadow-sm flex items-center gap-4">
+                <div className="bg-green-50 p-3 rounded-xl text-green-600"><Users /></div>
+                <div><p className="text-[10px] font-black text-slate-400 uppercase">Ativos</p><p className="text-2xl font-black text-slate-800">{stats.totalAtivos}</p></div>
               </div>
-              <div className="bg-white p-5 rounded-2xl border shadow-sm">
-                <p className="text-[10px] font-black text-slate-400 uppercase text-orange-500">Atenção</p>
-                <p className="text-2xl font-black text-slate-800">{stats.totalAtencao}</p>
+              <div className="bg-white p-5 rounded-2xl border shadow-sm flex items-center gap-4">
+                <div className="bg-orange-50 p-3 rounded-xl text-orange-600"><AlertCircle /></div>
+                <div><p className="text-[10px] font-black text-slate-400 uppercase">Atenção</p><p className="text-2xl font-black text-slate-800">{stats.totalAtencao}</p></div>
               </div>
             </div>
+
+            <RemindersPanel clients={clients.filter(c => !isClientInactive(c))} />
 
             <div className="bg-white border rounded-2xl shadow-xl overflow-hidden">
               <div className="max-h-[70vh] overflow-auto relative" ref={monthsScrollRef}>
@@ -318,6 +330,10 @@ const App: React.FC = () => {
                               <p className="font-bold truncate text-sm uppercase">{client.name}</p>
                               <p className="text-[10px] font-black opacity-70">TEL: {client.phoneDigits}</p>
                             </div>
+                            <div className="flex flex-col gap-1">
+                              <button onClick={() => { setEditingClient(client); setIsFormOpen(true); }} className="p-1 hover:scale-110"><Pencil className="w-4 h-4" /></button>
+                              <button onClick={() => deleteClient(client.id)} className="p-1 hover:scale-110"><Trash2 className="w-4 h-4" /></button>
+                            </div>
                           </div>
                         </td>
                         {visibleMonths.map(m => {
@@ -325,7 +341,7 @@ const App: React.FC = () => {
                           const isMeetingMonth = cycle.indexOf(m) !== -1;
                           const s = client.statusByMonth[m];
                           return (
-                            <td key={m} className={`px-4 py-4 border-l text-center ${isMeetingMonth ? 'bg-white' : 'bg-slate-50/30'}`}>
+                            <td key={m} className={`px-4 py-4 border-l text-center ${isMeetingMonth ? 'bg-white' : 'bg-slate-50/30 opacity-30'}`}>
                               {isMeetingMonth && (
                                 <div className="space-y-2">
                                   <p className="text-[9px] font-black text-slate-400 uppercase">{MEETING_LABEL_TEXTS[cycle.indexOf(m)]}</p>
@@ -370,7 +386,13 @@ const App: React.FC = () => {
             await supabase.from('clients').insert(clientToDb(newClient));
             setIsFormOpen(false);
           }}
+          onUpdate={async (id, data) => {
+            setClients(prev => prev.map(c => c.id === id ? { ...c, ...data } : c));
+            await supabase.from('clients').update(clientToDb(clients.find(c => c.id === id)!)).eq('id', id);
+            setIsFormOpen(false);
+          }}
           onClose={() => setIsFormOpen(false)}
+          clientToEdit={editingClient}
         />
       )}
     </div>
