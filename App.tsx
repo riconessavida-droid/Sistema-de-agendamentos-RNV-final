@@ -99,14 +99,11 @@ const App: React.FC = () => {
   const [checklistMonth, setChecklistMonth] = useState<string>(() => toMonthKey(new Date()));
   const [checklistSubFilter, setChecklistSubFilter] = useState<ChecklistSubFilter>('all');
 
-  // Mantemos a lista de meses ampla para permitir rolagem para o passado
+  // Mantém os meses desde Jan/2025
   const [visibleMonths, setVisibleMonths] = useState<string[]>(() => {
-    const now = new Date();
     const months: string[] = [];
-    // Começa em Jan/2025 e vai até 12 meses após o atual
-    const start = new Date(2025, 0, 1);
-    const end = addMonths(now, 12);
-    let current = start;
+    let current = new Date(2025, 0, 1);
+    const end = addMonths(new Date(), 12);
     while (current <= end) {
       months.push(toMonthKey(current));
       current = addMonths(current, 1);
@@ -116,7 +113,7 @@ const App: React.FC = () => {
 
   const monthsScrollRef = useRef<HTMLDivElement | null>(null);
 
-  // ✅ CORREÇÃO 1: Scroll automático para o mês atual ao entrar na aba Visão Geral
+  // ✅ CORREÇÃO: Scroll automático para o mês atual
   useEffect(() => {
     if (activeTab !== 'overview' || loadingClients) return;
     
@@ -128,13 +125,12 @@ const App: React.FC = () => {
       const idx = visibleMonths.indexOf(nowKey);
       if (idx === -1) return;
 
-      const monthColWidth = 240; // Largura da coluna no CSS
+      const monthColWidth = 240;
       const targetLeft = idx * monthColWidth - (container.clientWidth / 2 - monthColWidth / 2);
       container.scrollLeft = Math.max(0, targetLeft);
     };
 
-    // Pequeno delay para garantir que a tabela renderizou
-    const timer = setTimeout(scrollToCurrent, 300);
+    const timer = setTimeout(scrollToCurrent, 400);
     return () => clearTimeout(timer);
   }, [activeTab, visibleMonths, loadingClients]);
 
@@ -169,8 +165,7 @@ const App: React.FC = () => {
     };
     loadUsers();
   }, [currentUser]);
-
-  const handleLogin = (user: User) => {
+    const handleLogin = (user: User) => {
     const sessionUser = { ...user };
     delete (sessionUser as any).password;
     setCurrentUser(sessionUser);
@@ -184,7 +179,8 @@ const App: React.FC = () => {
     setClients([]);
     setActiveTab('overview');
   };
-    const isClientInactive = (client: Client) => {
+
+  const isClientInactive = (client: Client) => {
     return Object.values(client.statusByMonth).some(s => s.status === MeetingStatus.CLOSED_CONTRACT);
   };
 
@@ -220,12 +216,12 @@ const App: React.FC = () => {
     return clients.filter(c => {
       const matchesSearch = c.name.toLowerCase().includes(searchTerm.toLowerCase()) || c.phoneDigits.includes(searchTerm);
       const matchesMonth = filterMonth === 'all' || c.startMonthYear === filterMonth;
-      const inactive = isClientInactive(client);
-      if (statusFilter === 'active') return matchesSearch && matchesMonth && !isClientInactive(c);
-      if (statusFilter === 'finalized') return matchesSearch && matchesMonth && isClientInactive(c);
+      const inactive = isClientInactive(c);
+      if (statusFilter === 'active') return matchesSearch && matchesMonth && !inactive;
+      if (statusFilter === 'finalized') return matchesSearch && matchesMonth && inactive;
       if (statusFilter === 'needs_attention') return matchesSearch && matchesMonth && isOrangeClient(c);
       return matchesSearch && matchesMonth;
-    });
+    }).sort((a, b) => a.startMonthYear.localeCompare(b.startMonthYear) || a.sequenceInMonth - b.sequenceInMonth);
   }, [clients, searchTerm, filterMonth, statusFilter]);
 
   const checklistData = useMemo(() => {
@@ -245,11 +241,10 @@ const App: React.FC = () => {
     };
   }, [clients, checklistMonth, checklistSubFilter]);
 
-  // ✅ CORREÇÃO 2: Gráfico baseado em contratos FECHADOS no mês
+  // ✅ CORREÇÃO: Gráfico baseado em contratos FECHADOS no mês
   const reportData = useMemo(() => {
     const months = getNextMonths(toMonthKey(new Date()), 12);
     const map: Record<string, number> = {};
-    
     clients.forEach(client => {
       Object.entries(client.statusByMonth).forEach(([mKey, data]) => {
         if (data.status === MeetingStatus.CLOSED_CONTRACT) {
@@ -257,7 +252,6 @@ const App: React.FC = () => {
         }
       });
     });
-    
     return months.map(m => ({ label: getMonthLabel(m), count: map[m] || 0 }));
   }, [clients]);
 
@@ -331,8 +325,8 @@ const App: React.FC = () => {
                               <p className="text-[10px] font-black opacity-70">TEL: {client.phoneDigits}</p>
                             </div>
                             <div className="flex flex-col gap-1">
-                              <button onClick={() => { setEditingClient(client); setIsFormOpen(true); }} className="p-1 hover:scale-110"><Pencil className="w-4 h-4" /></button>
-                              <button onClick={() => deleteClient(client.id)} className="p-1 hover:scale-110"><Trash2 className="w-4 h-4" /></button>
+                              <button onClick={() => { setEditingClient(client); setIsFormOpen(true); }} className="p-1 hover:scale-110"><Pencil className="w-4 h-4 text-slate-400" /></button>
+                              <button onClick={() => deleteClient(client.id)} className="p-1 hover:scale-110"><Trash2 className="w-4 h-4 text-slate-400" /></button>
                             </div>
                           </div>
                         </td>
