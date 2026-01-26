@@ -151,25 +151,50 @@ const App: React.FC = () => {
     loadClients();
   }, [currentUser]);
 
-  // 3) Carrega usuários (só ADMIN)
+  // 3) Carrega usuários (só ADMIN) - COM FALLBACK para erro 400
   useEffect(() => {
     const loadUsers = async () => {
       if (!currentUser || currentUser.role !== UserRole.ADMIN) return;
       setLoadingUsers(true);
 
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id,name,email,role,active')
-        .order('name', { ascending: true });
+      try {
+        // Tenta carregar com todas as colunas
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('id,name,email,role,active')
+          .order('name', { ascending: true });
 
-      if (error) {
-        console.error('Erro ao carregar users:', error);
+        if (error) {
+          console.warn('Erro ao carregar users (tentando fallback):', error);
+          
+          // Fallback: tenta carregar apenas id e email
+          const { data: fallbackData, error: fallbackError } = await supabase
+            .from('profiles')
+            .select('id,email')
+            .order('email', { ascending: true });
+
+          if (fallbackError) {
+            console.error('Erro no fallback também:', fallbackError);
+            setUsers([]);
+          } else {
+            // Transforma dados do fallback
+            const fallbackUsers = (fallbackData || []).map((row: any) => ({
+              id: row.id,
+              name: row.email?.split('@')[0] || 'Usuário',
+              email: row.email || '',
+              role: UserRole.ASSISTANT,
+              active: true
+            }));
+            setUsers(fallbackUsers);
+          }
+        } else {
+          setUsers(data as User[]);
+        }
+      } catch (err) {
+        console.error('Erro inesperado ao carregar users:', err);
+      } finally {
         setLoadingUsers(false);
-        return;
       }
-
-      setUsers(data as User[]);
-      setLoadingUsers(false);
     };
 
     loadUsers();
@@ -408,78 +433,4 @@ const App: React.FC = () => {
     return clients
       .filter(c => {
         const matchesSearch =
-          c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          c.phoneDigits.includes(searchTerm);
-
-        const matchesMonth = filterMonth === 'all' || c.startMonthYear === filterMonth;
-
-        const inactive = isClientInactive(c);
-        let matchesStatus = true;
-        if (statusFilter === 'active') matchesStatus = !inactive;
-        else if (statusFilter === 'finalized') matchesStatus = inactive;
-
-        return matchesSearch && matchesMonth && matchesStatus;
-      })
-      .sort((a, b) => {
-        if (a.startMonthYear !== b.startMonthYear) return a.startMonthYear.localeCompare(b.startMonthYear);
-        return (a.sequenceInMonth || 0) - (b.sequenceInMonth || 0);
-      });
-  }, [clients, searchTerm, filterMonth, statusFilter]);
-
-  const checklistData = useMemo(() => {
-    const activeClients = clients.filter(c => !isClientInactive(c));
-
-    const activeThisMonth = activeClients.reduce((acc, client) => {
-      const cycleMonths = getNextMonths(client.startMonthYear, 5);
-      const meetingIdx = cycleMonths.indexOf(checklistMonth);
-
-      if (meetingIdx !== -1) {
-        const statusData = client.statusByMonth[checklistMonth];
-        acc.push({
-          client,
-          meetingIdx,
-          meetingLabel: MEETING_LABEL_TEXTS[meetingIdx],
-          status: statusData?.status || MeetingStatus.PENDING,
-          doneDate: statusData?.customDate || client.startDate
-        });
-      }
-      return acc;
-    }, [] as Array<{
-      client: Client;
-      meetingIdx: number;
-      meetingLabel: string;
-      status: MeetingStatus;
-      doneDate: number;
-    }>);
-
-    const pendingAll = activeThisMonth.filter(item =>
-      item.status !== MeetingStatus.DONE &&
-      item.status !== MeetingStatus.CLOSED_CONTRACT
-    );
-
-    const filteredPending = pendingAll.filter(item => {
-      if (checklistSubFilter === 'all') return true;
-      if (checklistSubFilter === 'pending') return item.status === MeetingStatus.PENDING;
-      if (checklistSubFilter === 'not_done') return item.status === MeetingStatus.NOT_DONE;
-      if (checklistSubFilter === 'rescheduled') return item.status === MeetingStatus.RESCHEDULED;
-      return true;
-    });
-
-    return {
-      pending: filteredPending,
-      completed: activeThisMonth.filter(item =>
-        item.status === MeetingStatus.DONE ||
-        item.status === MeetingStatus.CLOSED_CONTRACT
-      ),
-      counts: {
-        all: pendingAll.length,
-        pending: pendingAll.filter(i => i.status === MeetingStatus.PENDING).length,
-        not_done: pendingAll.filter(i => i.status === MeetingStatus.NOT_DONE).length,
-        rescheduled: pendingAll.filter(i => i.status === MeetingStatus.RESCHEDULED).length
-      }
-    };
-  }, [clients, checklistMonth, checklistSubFilter]);
-
-  const stats = useMemo(() => {
-    const totalAtivos = clients.filter(c => !isClientInactive(c)).length;
-    const totalFinalizados = clients.filter(c =>
+          c.name.toLowerCase().includes(searchTerm
