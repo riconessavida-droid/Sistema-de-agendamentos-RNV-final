@@ -147,8 +147,8 @@ const App: React.FC = () => {
     };
 
     run();
-    const t = setTimeout(run, 300);
-    return () => clearTimeout(t);
+    const t = window.setTimeout(run, 300);
+    return () => window.clearTimeout(t);
   }, [activeTab, visibleMonths]);
 
   useEffect(() => {
