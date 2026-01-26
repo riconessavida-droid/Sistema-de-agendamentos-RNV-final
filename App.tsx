@@ -105,7 +105,16 @@ const App: React.FC = () => {
   const [visibleMonths, setVisibleMonths] = useState<string[]>(() => {
   const now = new Date();
   const currentMonth = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}`;
-  return getNextMonths(currentMonth, 8);
+  
+  // Gerar 4 meses antes do atual
+  const months = [];
+  for (let i = -4; i &lt; 8; i++) { // -4 (passados) + 8 (futuros) = 12 meses total
+    const date = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    const monthYear = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+    months.push(monthYear);
+  }
+  
+  return months;
 });
 
   // 1) Recarrega usuário da sessão local
@@ -723,8 +732,8 @@ const App: React.FC = () => {
                 </button>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse">
+             <div className="overflow-x-auto relative">
+  <table className="w-full border-collapse">
                   <thead>
   <tr className="bg-slate-50 border-b sticky top-0 z-30">
     <th className="px-6 py-4 text-left text-xs font-black text-slate-400 uppercase tracking-wider sticky left-0 bg-slate-50 z-40 w-80 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">
