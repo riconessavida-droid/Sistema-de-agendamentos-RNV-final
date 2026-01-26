@@ -475,8 +475,7 @@ const App: React.FC = () => {
     );
 
     const filteredPending = pendingAll.filter(item => {
-      if
-              if (checklistSubFilter === 'all') return true;
+      if (checklistSubFilter === 'all') return true;
       if (checklistSubFilter === 'pending') return item.status === MeetingStatus.PENDING;
       if (checklistSubFilter === 'not_done') return item.status === MeetingStatus.NOT_DONE;
       if (checklistSubFilter === 'rescheduled') return item.status === MeetingStatus.RESCHEDULED;
@@ -685,8 +684,7 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            <
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="space-y-4">
                 <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2 px-2"><Clock className="w-4 h-4" /> Pendentes ({checklistData.pending.length})</h3>
                 {checklistData.pending.map((item: any) => (
