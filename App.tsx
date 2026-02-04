@@ -1,3 +1,5 @@
+console.log("URL FRONT:", import.meta.env.VITE_SUPABASE_URL);
+console.log("KEY FRONT:", import.meta.env.VITE_SUPABASE_ANON_KEY);
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Plus,
