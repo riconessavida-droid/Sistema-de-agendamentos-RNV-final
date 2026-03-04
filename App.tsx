@@ -407,19 +407,26 @@ const clientsWithAutoSequence = useMemo(() => {
     };
   }, [clients, checklistMonth, checklistSubFilter]);
 
-  const reportData = useMemo(() => {
-    const now = new Date();
-    const months: string[] = [];
-    for (let i = 11; i >= 0; i--) {
-      months.push(toMonthKey(addMonths(now, -i)));
-    }
-    const map: Record<string, number> = {};
-    clients.forEach(client => {
-      const startKey = client.startMonthYear;
-      map[startKey] = (map[startKey] || 0) + 1;
-    });
-    return months.map(m => ({ label: getMonthLabel(m), count: map[m] || 0 }));
-  }, [clients]);
+ const reportData = useMemo(() => {
+  const months: string[] = [];
+  for (let m = 1; m <= 12; m++) {
+    months.push(`${reportYear}-${String(m).padStart(2, '0')}`);
+  }
+
+  // ✅ Usa TODOS os clientes (ativos + encerrados)
+  // pois o startMonthYear nunca muda independente do status
+  const map: Record<string, number> = {};
+  clients.forEach(client => {
+    const key = client.startMonthYear;
+    map[key] = (map[key] || 0) + 1;
+  });
+
+  return months.map(m => ({
+    label: getMonthLabel(m),
+    shortLabel: getMonthLabel(m).split(' ')[0],
+    count: map[m] || 0
+  }));
+}, [clients, reportYear]);
 
   const stats = useMemo(() => {
     const totalAtivos = clients.filter(c => !isClientInactive(c)).length;
@@ -785,49 +792,155 @@ const clientsWithAutoSequence = useMemo(() => {
         )}
 
         {/* ===== ABA: RELATÓRIOS ===== */}
-        {activeTab === 'reports' && (
-          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
-            <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm space-y-8">
-              <div className="flex items-center justify-between gap-6">
-                <div>
-                  <h2 className="text-2xl font-black text-slate-800 flex items-center gap-3">
-                    <Trophy className="text-yellow-500 w-7 h-7" /> Clientes por Mês de Entrada
-                  </h2>
-                  <p className="text-slate-500 font-medium">Quantidade de clientes que iniciaram nos últimos 12 meses</p>
-                </div>
-                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-center min-w-[150px]">
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Total (12 Meses)</p>
-                  <p className="text-3xl font-black text-slate-800">{reportData.reduce((a, b) => a + b.count, 0)}</p>
-                </div>
-              </div>
-              <div className="overflow-x-auto pb-4">
-                <div className="relative h-80 w-[1200px] pt-8 px-4">
-                  <div className="absolute inset-x-4 top-8 bottom-12 flex items-end justify-between gap-4">
-                    {reportData.map((data, idx) => {
-                      const max = Math.max(...reportData.map(d => d.count), 5);
-                      const heightPercent = (data.count / max) * 100;
-                      return (
-                        <div key={idx} className="group relative flex flex-col items-center flex-1 min-w-[70px]">
-                          <div className="absolute -top-10 opacity-0 group-hover:opacity-100 transition-all bg-slate-800 text-white text-[10px] font-black px-2 py-1 rounded shadow-lg whitespace-nowrap">
-                            {data.count} {data.count === 1 ? 'Cliente' : 'Clientes'}
-                          </div>
-                          <div style={{ height: `${heightPercent}%` }} className="w-full max-w-[40px] bg-gradient-to-t from-yellow-500 to-yellow-400 rounded-t-xl transition-all duration-700 shadow-lg shadow-yellow-500/20 group-hover:from-slate-800 group-hover:to-slate-700" />
-                          <div className="absolute top-[105%] flex flex-col items-center">
-                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">{data.label.split(' ')[0]}</span>
-                            <span className="text-[8px] font-bold text-slate-300">{data.label.split(' ')[1]}</span>
-                          </div>
-                          {data.count === 0 && <div className="w-1 h-1 rounded-full bg-slate-200 mt-2" />}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="absolute left-0 right-0 bottom-12 h-px bg-slate-100" />
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+       {activeTab === 'reports' && (
+  <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
+    <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm space-y-8">
 
+      {/* CABEÇALHO + SELETOR DE ANO */}
+      <div className="flex flex-wrap items-center justify-between gap-6">
+        <div>
+          <h2 className="text-2xl font-black text-slate-800 flex items-center gap-3">
+            <Trophy className="text-yellow-500 w-7 h-7" /> Clientes por Mês de Entrada
+          </h2>
+          <p className="text-slate-500 font-medium">
+            Todos os clientes que iniciaram a consultoria em {reportYear} (ativos + encerrados)
+          </p>
+        </div>
+
+        {/* Seletor de ano */}
+        <div className="flex items-center gap-3 bg-slate-100 p-2 rounded-xl">
+          <button
+            onClick={() => setReportYear(y => y - 1)}
+            className="p-2 hover:bg-white rounded-lg transition-all shadow-sm"
+          >
+            <ChevronLeft className="w-5 h-5 text-slate-600" />
+          </button>
+          <span className="text-2xl font-black text-slate-800 min-w-[80px] text-center">
+            {reportYear}
+          </span>
+          <button
+            onClick={() => setReportYear(y => y + 1)}
+            className="p-2 hover:bg-white rounded-lg transition-all shadow-sm"
+          >
+            <ChevronRight className="w-5 h-5 text-slate-600" />
+          </button>
+        </div>
+
+        {/* Total do ano */}
+        <div className="p-4 bg-yellow-50 rounded-2xl border border-yellow-200 text-center min-w-[150px]">
+          <p className="text-[10px] font-black text-yellow-700 uppercase tracking-widest leading-none mb-1">
+            Total {reportYear}
+          </p>
+          <p className="text-3xl font-black text-yellow-600">
+            {reportData.reduce((a, b) => a + b.count, 0)}
+          </p>
+        </div>
+      </div>
+
+      {/* GRÁFICO DE BARRAS */}
+      <div className="overflow-x-auto pb-4">
+        <div className="relative h-80 min-w-[700px] pt-10 px-4">
+
+          {/* Linha de base */}
+          <div className="absolute left-4 right-4 bottom-12 h-px bg-slate-200" />
+
+          {/* Barras */}
+          <div className="absolute inset-x-4 top-10 bottom-12 flex items-end justify-between gap-3">
+            {reportData.map((data, idx) => {
+              const max = Math.max(...reportData.map(d => d.count), 1);
+              const heightPercent = max > 0 ? (data.count / max) * 100 : 0;
+              const isCurrentMonth =
+                reportYear === new Date().getFullYear() &&
+                idx === new Date().getMonth();
+
+              return (
+                <div
+                  key={idx}
+                  className="group relative flex flex-col items-center flex-1"
+                >
+                  {/* Tooltip hover */}
+                  <div className="absolute -top-8 opacity-0 group-hover:opacity-100 transition-all bg-slate-800 text-white text-[10px] font-black px-2 py-1 rounded shadow-lg whitespace-nowrap z-10">
+                    {data.count} {data.count === 1 ? 'cliente' : 'clientes'}
+                  </div>
+
+                  {/* Número em cima da barra */}
+                  {data.count > 0 && (
+                    <span
+                      className="absolute font-black text-xs text-slate-600"
+                      style={{ bottom: `calc(${heightPercent}% + 6px)` }}
+                    >
+                      {data.count}
+                    </span>
+                  )}
+
+                  {/* Barra */}
+                  {data.count > 0 ? (
+                    <div
+                      style={{ height: `${heightPercent}%`, minHeight: '8px' }}
+                      className={`w-full rounded-t-xl transition-all duration-700 ${
+                        isCurrentMonth
+                          ? 'bg-gradient-to-t from-yellow-600 to-yellow-400 shadow-lg shadow-yellow-500/30'
+                          : 'bg-gradient-to-t from-yellow-500 to-yellow-300 group-hover:from-slate-700 group-hover:to-slate-500'
+                      }`}
+                    />
+                  ) : (
+                    <div className="w-full h-2 rounded-t bg-slate-100" />
+                  )}
+
+                  {/* Label do mês */}
+                  <div className="absolute top-[105%] flex flex-col items-center">
+                    <span className={`text-[10px] font-black uppercase tracking-tighter ${
+                      isCurrentMonth ? 'text-yellow-600' : 'text-slate-400'
+                    }`}>
+                      {data.shortLabel}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* GRADE RESUMO — 12 cards com contagem por mês */}
+      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3 pt-4 border-t">
+        {reportData.map((data, idx) => {
+          const isCurrentMonth =
+            reportYear === new Date().getFullYear() &&
+            idx === new Date().getMonth();
+          return (
+            <div
+              key={idx}
+              className={`p-3 rounded-xl text-center border transition-all ${
+                isCurrentMonth
+                  ? 'bg-yellow-500 border-yellow-600 shadow-md'
+                  : data.count > 0
+                  ? 'bg-yellow-50 border-yellow-200'
+                  : 'bg-slate-50 border-slate-100'
+              }`}
+            >
+              <p className={`text-[9px] font-black uppercase ${
+                isCurrentMonth ? 'text-yellow-100' : 'text-slate-400'
+              }`}>
+                {data.shortLabel}
+              </p>
+              <p className={`text-xl font-black ${
+                isCurrentMonth
+                  ? 'text-white'
+                  : data.count > 0
+                  ? 'text-yellow-600'
+                  : 'text-slate-300'
+              }`}>
+                {data.count}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+
+    </div>
+  </div>
+)}
         {/* ===== ABA: USUÁRIOS ===== */}
         {activeTab === 'users' && (
           <div className="bg-white p-6 rounded-2xl border shadow-sm animate-in fade-in">
