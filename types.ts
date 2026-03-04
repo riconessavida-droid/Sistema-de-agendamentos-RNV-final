@@ -41,3 +41,18 @@ export interface Reminder {
   date: string;
   status: MeetingStatus;
 }
+
+export interface Client {
+  id: string;
+  name: string;
+  phoneDigits: string;
+  startMonthYear: string;
+  startDate: number;
+  sequenceInMonth: number;
+  statusByMonth: Record<string, {
+    status: MeetingStatus;
+    customDate?: number;
+  }>;
+  groupColor: string;
+  extraMeetings: number; // ✅ NOVO — quantas reuniões extras além das 5 padrão
+}
