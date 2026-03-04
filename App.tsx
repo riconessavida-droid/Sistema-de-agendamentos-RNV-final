@@ -82,7 +82,7 @@ const App: React.FC = () => {
     const months: string[] = [];
     let current = new Date(2025, 5, 1); // Junho 2025
     const end = addMonths(new Date(), 12);
-    while (current &lt;= end) {
+    while (current <= end) {
       months.push(toMonthKey(current));
       current = addMonths(current, 1);
     }
@@ -272,7 +272,7 @@ const App: React.FC = () => {
   const updateMeetingData = async (
     clientId: string,
     monthYear: string,
-    updates: Partial&lt;{ status: MeetingStatus; customDate?: number }>
+    updates: Partial<{ status: MeetingStatus; customDate?: number }>
   ) => {
     const before = clients.find(c => c.id === clientId);
     if (!before) return;
@@ -450,7 +450,7 @@ const App: React.FC = () => {
           <button onClick={() => setActiveTab('overview')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'overview' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Visão Geral</button>
           <button onClick={() => setActiveTab('checklist')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'checklist' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Checklist Mensal</button>
           {currentUser.role === UserRole.ADMIN && (
-            &lt;>
+            <>
               <button onClick={() => setActiveTab('reports')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'reports' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Relatórios</button>
               <button onClick={() => setActiveTab('users')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'users' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Usuários</button>
             </>
@@ -463,7 +463,7 @@ const App: React.FC = () => {
 
         {/* ===== ABA: VISÃO GERAL ===== */}
         {activeTab === 'overview' && (
-          &lt;>
+          <>
             {/* STATS */}
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
               <div className="bg-white p-5 rounded-2xl border flex items-center gap-4 shadow-sm">
@@ -576,7 +576,7 @@ const App: React.FC = () => {
                                     +
                                   </button>
                                   {(client.extraMeetings ?? 0) > 0 && (
-                                    &lt;>
+                                    <>
                                       <span className={`text-[8px] font-black ${orange ? 'text-white/80' : 'text-slate-500'}`}>
                                         +{client.extraMeetings}
                                       </span>
