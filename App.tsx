@@ -845,7 +845,7 @@ const clientsWithAutoSequence = useMemo(() => {
           <div className="absolute left-4 right-4 bottom-12 h-px bg-slate-200" />
 
           {/* Barras */}
-          <div className="absolute inset-x-4 top-10 bottom-12 flex items-end justify-between gap-3">
+          <div className="absolute inset-x-4 top-10 bottom-12 flex items-end justify-between gap-3 bg-slate-50/50 rounded-xl p-2"
             {reportData.map((data, idx) => {
               const max = Math.max(...reportData.map(d => d.count), 1);
               const heightPercent = max > 0 ? (data.count / max) * 100 : 0;
@@ -879,8 +879,8 @@ const clientsWithAutoSequence = useMemo(() => {
                       style={{ height: `${heightPercent}%`, minHeight: '8px' }}
                       className={`w-full rounded-t-xl transition-all duration-700 ${
                         isCurrentMonth
-                          ? 'bg-gradient-to-t from-yellow-600 to-yellow-400 shadow-lg shadow-yellow-500/30'
-                          : 'bg-gradient-to-t from-yellow-500 to-yellow-300 group-hover:from-slate-700 group-hover:to-slate-500'
+                          ? 'bg-gradient-to-t from-yellow-600 to-amber-400 shadow-lg shadow-yellow-500/40 ring-1 ring-yellow-
+                          : 'bg-gradient-to-t from-slate-700 to-slate-500 group-hover:from-yellow-600 group-hover:to-yellow-400'
                       }`}
                     />
                   ) : (
