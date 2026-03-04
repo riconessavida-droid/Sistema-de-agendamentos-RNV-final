@@ -17,15 +17,16 @@ export interface User {
   email: string;
   password?: string;
   role: UserRole;
+  active?: boolean;
 }
 
 export interface Client {
   id: string;
   name: string;
-  phoneDigits: string; 
-  startMonthYear: string; 
-  startDate: number; 
-  sequenceInMonth: number; 
+  phoneDigits: string;
+  startMonthYear: string;
+  startDate: number;
+  sequenceInMonth: number;
   statusByMonth: Record<string, {
     status: MeetingStatus;
     customDate?: number;
