@@ -347,7 +347,7 @@ const App: React.FC = () => {
         });
       }
       return acc;
-    }, [] as Array&lt;{
+    }, [] as Array<{
       client: Client;
       meetingIdx: number;
       meetingLabel: string;
