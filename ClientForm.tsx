@@ -3,24 +3,21 @@ import { X } from 'lucide-react';
 import { Client } from './types';
 
 interface ClientFormProps {
-  onAdd: (client: Omit<Client, 'id' | 'statusByMonth' | 'groupColor'>) => void;
+  onAdd: (client: Omit<Client, 'id' | 'statusByMonth' | 'groupColor' | 'sequenceInMonth'>) => void;
   onUpdate?: (id: string, data: Partial<Client>) => void;
   onClose: () => void;
   clientToEdit?: Client | null;
-  nextSequence?: number;
 }
 
 export const ClientForm: React.FC<ClientFormProps> = ({
   onAdd,
   onUpdate,
   onClose,
-  clientToEdit,
-  nextSequence
+  clientToEdit
 }) => {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [sequence, setSequence] = useState<number>(1);
 
   useEffect(() => {
     if (clientToEdit) {
@@ -29,16 +26,12 @@ export const ClientForm: React.FC<ClientFormProps> = ({
       const [year, month] = clientToEdit.startMonthYear.split('-');
       const day = clientToEdit.startDate.toString().padStart(2, '0');
       setDate(`${year}-${month}-${day}`);
-      setSequence(clientToEdit.sequenceInMonth);
-    } else if (nextSequence) {
-      setSequence(nextSequence);
     }
-  }, [clientToEdit, nextSequence]);
+  }, [clientToEdit]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name || !phone || !date) return;
-
     const [year, month, day] = date.split('-').map(Number);
     const startMonthYear = `${year}-${month.toString().padStart(2, '0')}`;
     const startDate = day;
@@ -46,18 +39,17 @@ export const ClientForm: React.FC<ClientFormProps> = ({
     if (clientToEdit && onUpdate) {
       onUpdate(clientToEdit.id, {
         name,
-        phoneDigits: phone, // ✅ CORRIGIDO: salva número completo
+        phoneDigits: phone,
         startMonthYear,
-        startDate,
-        sequenceInMonth: sequence
+        startDate
       });
     } else {
       onAdd({
         name,
-        phoneDigits: phone, // ✅ CORRIGIDO: salva número completo
+        phoneDigits: phone,
         startMonthYear,
         startDate,
-        sequenceInMonth: sequence
+        extraMeetings: 0
       });
     }
     onClose();
@@ -76,40 +68,29 @@ export const ClientForm: React.FC<ClientFormProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          <div className="grid grid-cols-4 gap-4">
-            <div className="col-span-1">
-              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Ordem</label>
-              <input
-                type="number"
-                min="1"
-                className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none font-bold text-center bg-slate-50"
-                value={sequence}
-                onChange={e => setSequence(parseInt(e.target.value) || 1)}
-              />
-            </div>
-            <div className="col-span-3">
-              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nome do Cliente</label>
-              <input
-                autoFocus
-                required
-                className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none"
-                value={name}
-                onChange={e => setName(e.target.value)}
-              />
-            </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+              Nome do Cliente
+            </label>
+            <input
+              autoFocus
+              required
+              className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none"
+              value={name}
+              onChange={e => setName(e.target.value)}
+            />
           </div>
 
           <div>
-            {/* ✅ CORRIGIDO: label atualizado para indicar número completo */}
             <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
-              Telefone Completo (com DDD)
+              Telefone (completo para WhatsApp)
             </label>
             <input
               required
-              placeholder="Ex: 11999998888"
               className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none"
               value={phone}
               onChange={e => setPhone(e.target.value)}
+              placeholder="Ex: 11999998888"
             />
           </div>
 
@@ -124,6 +105,9 @@ export const ClientForm: React.FC<ClientFormProps> = ({
               value={date}
               onChange={e => setDate(e.target.value)}
             />
+            <p className="text-[10px] text-slate-400 mt-1 font-bold">
+              A numeração no mês é gerada automaticamente pela data.
+            </p>
           </div>
 
           <div className="pt-4 flex gap-3">
