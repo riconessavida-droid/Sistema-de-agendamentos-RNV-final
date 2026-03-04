@@ -845,7 +845,7 @@ const clientsWithAutoSequence = useMemo(() => {
           <div className="absolute left-4 right-4 bottom-12 h-px bg-slate-200" />
 
           {/* Barras */}
-          <div className="absolute inset-x-4 top-10 bottom-12 flex items-end justify-between gap-3 bg-slate-50/50 rounded-xl p-2"
+          <div className="absolute inset-x-4 top-10 bottom-12 flex items-end justify-between gap-3 bg-slate-50/50 rounded-xl p-2">
             {reportData.map((data, idx) => {
               const max = Math.max(...reportData.map(d => d.count), 1);
               const heightPercent = max > 0 ? (data.count / max) * 100 : 0;
