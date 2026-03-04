@@ -1,11 +1,10 @@
-
 import React from 'react';
-import { 
-  CheckCircle2, 
-  XCircle, 
-  Clock, 
-  UserMinus, 
-  CalendarDays 
+import {
+  CheckCircle2,
+  XCircle,
+  Clock,
+  UserMinus,
+  CalendarDays
 } from 'lucide-react';
 import { MeetingStatus } from './types';
 
@@ -23,8 +22,8 @@ export const STATUS_OPTIONS = [
 ];
 
 export const GROUP_COLORS = [
-  'bg-yellow-100 border-yellow-200 text-yellow-800', // Yellow
-  'bg-slate-200/50 border-slate-300 text-slate-700', // Medium transparent gray
+  'bg-yellow-100 border-yellow-200 text-yellow-800',
+  'bg-slate-200/50 border-slate-300 text-slate-700',
   'bg-amber-100 border-amber-200 text-amber-800',
   'bg-slate-300/40 border-slate-400 text-slate-600',
 ];
@@ -37,12 +36,13 @@ export const getMonthLabel = (monthYear: string) => {
 export const getNextMonths = (startMonthYear: string, count: number): string[] => {
   const [year, month] = startMonthYear.split('-').map(Number);
   const result: string[] = [];
-  
+
   for (let i = 0; i < count; i++) {
     const d = new Date(year, month - 1 + i, 1);
     const m = (d.getMonth() + 1).toString().padStart(2, '0');
     result.push(`${d.getFullYear()}-${m}`);
   }
+
   return result;
 };
 
