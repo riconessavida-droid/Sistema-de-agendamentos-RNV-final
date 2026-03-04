@@ -182,24 +182,25 @@ const App: React.FC = () => {
     return toMonthKey(new Date()) >= cycleMonths[totalMeetings - 2];
   };
 
-  const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor'>) => {
-    const colorIndex = clients.length % GROUP_COLORS.length;
-    const groupColor = GROUP_COLORS[colorIndex];
-    const newClient: Client = {
-      ...data,
-      id: crypto.randomUUID(),
-      statusByMonth: {},
-      groupColor,
-      extraMeetings: 0
-    };
-    setClients(prev => [...prev, newClient]);
-    const { error } = await supabase.from('clients').insert(clientToDb(newClient));
-    if (error) {
-      console.error('Erro ao inserir client:', error);
-      setClients(prev => prev.filter(c => c.id !== newClient.id));
-      alert(`Erro ao salvar cliente no Supabase: ${error.message}`);
-    }
+  const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor' | 'sequenceInMonth'>) => {
+  const colorIndex = clients.length % GROUP_COLORS.length;
+  const groupColor = GROUP_COLORS[colorIndex];
+  const newClient: Client = {
+    ...data,
+    id: crypto.randomUUID(),
+    statusByMonth: {},
+    groupColor,
+    sequenceInMonth: 0, // será calculado automaticamente
+    extraMeetings: data.extraMeetings ?? 0
   };
+  setClients(prev => [...prev, newClient]);
+  const { error } = await supabase.from('clients').insert(clientToDb(newClient));
+  if (error) {
+    console.error('Erro ao inserir client:', error);
+    setClients(prev => prev.filter(c => c.id !== newClient.id));
+    alert(`Erro ao salvar cliente no Supabase: ${error.message}`);
+  }
+};
 
   const updateClient = async (id: string, data: Partial<Client>) => {
     const before = clients.find(c => c.id === id);
@@ -308,28 +309,53 @@ const App: React.FC = () => {
     return Array.from(months).sort();
   }, [clients]);
 
-  const filteredClients = useMemo(() => {
-    return clients
-      .filter(c => {
-        const matchesSearch =
-          c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          c.phoneDigits.includes(searchTerm);
-        const matchesMonth = filterMonth === 'all' || c.startMonthYear === filterMonth;
-        const inactive = isClientInactive(c);
-        const orange = isOrangeClient(c);
-        let matchesStatus = true;
-        if (statusFilter === 'active') matchesStatus = !inactive;
-        else if (statusFilter === 'finalized') matchesStatus = inactive;
-        else if (statusFilter === 'needs_attention') matchesStatus = orange;
-        return matchesSearch && matchesMonth && matchesStatus;
-      })
-      .sort((a, b) => {
-        if (a.startMonthYear !== b.startMonthYear)
-          return a.startMonthYear.localeCompare(b.startMonthYear);
-        return (a.sequenceInMonth || 0) - (b.sequenceInMonth || 0);
-      });
-  }, [clients, searchTerm, filterMonth, statusFilter]);
+  // ✅ NOVO — sequência automática por mês baseada na data da reunião
+const clientsWithAutoSequence = useMemo(() => {
+  // Agrupa por mês de início
+  const byMonth: Record<string, Client[]> = {};
+  clients.forEach(c => {
+    if (!byMonth[c.startMonthYear]) byMonth[c.startMonthYear] = [];
+    byMonth[c.startMonthYear].push(c);
+  });
 
+  // Dentro de cada mês, ordena por startDate e atribui sequência
+  const sequenceMap: Record<string, number> = {};
+  Object.values(byMonth).forEach(group => {
+    group
+      .sort((a, b) => a.startDate - b.startDate)
+      .forEach((client, idx) => {
+        sequenceMap[client.id] = idx + 1;
+      });
+  });
+
+  return clients.map(c => ({
+    ...c,
+    sequenceInMonth: sequenceMap[c.id] ?? 1
+  }));
+}, [clients]);
+
+  const filteredClients = useMemo(() => {
+  return clientsWithAutoSequence  // ← era "clients"
+    .filter(c => {
+      const matchesSearch =
+        c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        c.phoneDigits.includes(searchTerm);
+      const matchesMonth = filterMonth === 'all' || c.startMonthYear === filterMonth;
+      const inactive = isClientInactive(c);
+      const orange = isOrangeClient(c);
+      let matchesStatus = true;
+      if (statusFilter === 'active') matchesStatus = !inactive;
+      else if (statusFilter === 'finalized') matchesStatus = inactive;
+      else if (statusFilter === 'needs_attention') matchesStatus = orange;
+      return matchesSearch && matchesMonth && matchesStatus;
+    })
+    .sort((a, b) => {
+      if (a.startMonthYear !== b.startMonthYear)
+        return a.startMonthYear.localeCompare(b.startMonthYear);
+      return a.startDate - b.startDate; // ← ordena por data dentro do mês
+    });
+}, [clientsWithAutoSequence, searchTerm, filterMonth, statusFilter]);
+  
   const checklistData = useMemo(() => {
     const activeClients = clients.filter(c => !isClientInactive(c));
     const activeThisMonth = activeClients.reduce((acc, client) => {
@@ -535,12 +561,11 @@ const App: React.FC = () => {
                           {/* COLUNA DE IDENTIFICAÇÃO */}
                           <td className={`px-4 py-4 sticky left-0 z-20 w-80 border-r shadow-sm transition-colors ${orange ? 'bg-orange-500 text-white' : inactive ? 'bg-slate-200 text-slate-500' : client.groupColor}`}>
                             <div className="flex items-start gap-3">
-                              <input
-                                type="number"
-                                value={client.sequenceInMonth}
-                                onChange={e => updateClientSequence(client.id, parseInt(e.target.value) || 1)}
-                                className={`w-10 h-10 rounded-xl text-center font-black outline-none transition-all ${orange ? 'bg-white/20 text-white' : 'bg-slate-800 text-white'}`}
-                              />
+                             <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm flex-shrink-0 ${
+  orange ? 'bg-white/20 text-white' : 'bg-slate-800 text-white'
+}`}>
+  {client.sequenceInMonth}
+</div>
                               <div className="flex-1 min-w-0">
                                 <p className={`font-bold truncate text-sm uppercase ${inactive ? 'line-through opacity-50' : ''}`}>{client.name}</p>
                                 <a
@@ -848,14 +873,13 @@ const App: React.FC = () => {
 
       {/* MODAL */}
       {isFormOpen && (
-        <ClientForm
-          onAdd={async data => { await addClient(data); setIsFormOpen(false); }}
-          onUpdate={async (id, data) => { await updateClient(id, data); setIsFormOpen(false); }}
-          onClose={() => { setIsFormOpen(false); setEditingClient(null); }}
-          clientToEdit={editingClient}
-          nextSequence={editingClient ? undefined : clients.filter(c => c.startMonthYear === toMonthKey(new Date())).length + 1}
-        />
-      )}
+  <ClientForm
+    onAdd={async data => { await addClient(data); setIsFormOpen(false); }}
+    onUpdate={async (id, data) => { await updateClient(id, data); setIsFormOpen(false); }}
+    onClose={() => { setIsFormOpen(false); setEditingClient(null); }}
+    clientToEdit={editingClient}
+  />
+)}
 
       <footer className="py-8 border-t bg-white mt-auto">
         <p className="text-[10px] text-slate-400 font-black uppercase text-center tracking-[0.3em]">
