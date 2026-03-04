@@ -77,6 +77,7 @@ const App: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
   const [checklistMonth, setChecklistMonth] = useState<string>(() => toMonthKey(new Date()));
   const [checklistSubFilter, setChecklistSubFilter] = useState<ChecklistSubFilter>('all');
+  const [reportYear, setReportYear] = useState<number>(2025);
 
   const [visibleMonths, setVisibleMonths] = useState<string[]>(() => {
     const months: string[] = [];
