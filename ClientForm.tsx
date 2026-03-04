@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, X } from 'lucide-react';
-import { Client } from '../types';
+import { X } from 'lucide-react';
+import { Client } from './types';
 
 interface ClientFormProps {
   onAdd: (client: Omit<Client, 'id' | 'statusByMonth' | 'groupColor'>) => void;
@@ -10,7 +10,13 @@ interface ClientFormProps {
   nextSequence?: number;
 }
 
-export const ClientForm: React.FC<ClientFormProps> = ({ onAdd, onUpdate, onClose, clientToEdit, nextSequence }) => {
+export const ClientForm: React.FC<ClientFormProps> = ({
+  onAdd,
+  onUpdate,
+  onClose,
+  clientToEdit,
+  nextSequence
+}) => {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -40,7 +46,7 @@ export const ClientForm: React.FC<ClientFormProps> = ({ onAdd, onUpdate, onClose
     if (clientToEdit && onUpdate) {
       onUpdate(clientToEdit.id, {
         name,
-        phoneDigits: phone,
+        phoneDigits: phone, // ✅ CORRIGIDO: salva número completo
         startMonthYear,
         startDate,
         sequenceInMonth: sequence
@@ -48,7 +54,7 @@ export const ClientForm: React.FC<ClientFormProps> = ({ onAdd, onUpdate, onClose
     } else {
       onAdd({
         name,
-        phoneDigits: phone.slice(-4),
+        phoneDigits: phone, // ✅ CORRIGIDO: salva número completo
         startMonthYear,
         startDate,
         sequenceInMonth: sequence
@@ -68,7 +74,7 @@ export const ClientForm: React.FC<ClientFormProps> = ({ onAdd, onUpdate, onClose
             <X className="w-6 h-6" />
           </button>
         </div>
-        
+
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div className="grid grid-cols-4 gap-4">
             <div className="col-span-1">
@@ -92,17 +98,25 @@ export const ClientForm: React.FC<ClientFormProps> = ({ onAdd, onUpdate, onClose
               />
             </div>
           </div>
+
           <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Telefone (Final)</label>
+            {/* ✅ CORRIGIDO: label atualizado para indicar número completo */}
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+              Telefone Completo (com DDD)
+            </label>
             <input
               required
+              placeholder="Ex: 11999998888"
               className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none"
               value={phone}
               onChange={e => setPhone(e.target.value)}
             />
           </div>
+
           <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Data da Primeira Reunião (Início)</label>
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+              Data da Primeira Reunião
+            </label>
             <input
               required
               type="date"
@@ -111,9 +125,19 @@ export const ClientForm: React.FC<ClientFormProps> = ({ onAdd, onUpdate, onClose
               onChange={e => setDate(e.target.value)}
             />
           </div>
+
           <div className="pt-4 flex gap-3">
-            <button type="button" onClick={onClose} className="flex-1 px-4 py-2 border rounded-lg font-medium">Cancelar</button>
-            <button type="submit" className="flex-1 px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 font-medium">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 px-4 py-2 border rounded-lg font-medium"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              className="flex-1 px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 font-medium"
+            >
               {clientToEdit ? 'Atualizar' : 'Salvar'}
             </button>
           </div>
