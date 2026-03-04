@@ -879,7 +879,7 @@ const clientsWithAutoSequence = useMemo(() => {
                       style={{ height: `${heightPercent}%`, minHeight: '8px' }}
                       className={`w-full rounded-t-xl transition-all duration-700 ${
                         isCurrentMonth
-                          ? 'bg-gradient-to-t from-yellow-600 to-amber-400 shadow-lg shadow-yellow-500/40 ring-1 ring-yellow-
+                          ? 'bg-gradient-to-t from-yellow-600 to-amber-400 shadow-lg shadow-yellow-500/40ring-1 ring-yellow-600'
                           : 'bg-gradient-to-t from-slate-700 to-slate-500 group-hover:from-yellow-600 group-hover:to-yellow-400'
                       }`}
                     />
