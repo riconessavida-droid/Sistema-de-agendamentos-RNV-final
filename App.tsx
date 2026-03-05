@@ -881,7 +881,7 @@ const clientsWithAutoSequence = useMemo(() => {
           </div>
         )}
 
-       {/* ===== ABA: TAREFAS DO DIA ===== */}
+      {/* ===== ABA: TAREFAS DO DIA ===== */}
 {activeTab === 'tasks' && (() => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -893,72 +893,125 @@ const clientsWithAutoSequence = useMemo(() => {
     return d;
   });
 
-  // Monta todos os lembretes da janela
-  const allReminders: Array<{
-    client: Client;
-    nextMeetingDate: Date;
-    daysUntil: number;
-    lastMeetingDate: string;
-    nextMeetingLabel: string;
-  }> = [];
+  // Para cada cliente ativo com pelo menos 1 reunião feita,
+  // calcula a próxima reunião e em quantos dias ela cai
+  const getClientReminders = () => {
+    const result: Array<{
+      client: Client;
+      nextMeetingDate: Date;
+      daysUntil: number;
+      lastMeetingDate: string;
+      nextMeetingLabel: string;
+    }> = [];
 
-  clients
-    .filter(c => !isClientInactive(c))
-    .forEach(client => {
-      const totalMeetings = 5 + (client.extraMeetings ?? 0);
-      const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
+    clients
+      .filter(c => !isClientInactive(c))
+      .forEach(client => {
+        const totalMeetings = 5 + (client.extraMeetings ?? 0);
+        const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
 
-      let lastDoneDate: Date | null = null;
-      let nextMeetingLabel = '';
+        let lastDoneDate: Date | null = null;
+        let nextMeetingLabel = '';
 
-      for (let i = cycleMonths.length - 1; i >= 0; i--) {
-        const m = cycleMonths[i];
-        const s = client.statusByMonth[m];
-        if (s?.status === MeetingStatus.DONE) {
-          const day = s.customDate || client.startDate;
-          const [year, month] = m.split('-').map(Number);
-          lastDoneDate = new Date(year, month - 1, day);
-          const nextIdx = i + 1;
-          nextMeetingLabel = nextIdx < cycleMonths.length
-            ? (MEETING_LABEL_TEXTS[nextIdx] ?? `${nextIdx + 1}ª Reunião`)
-            : 'Última Reunião';
-          break;
+        for (let i = cycleMonths.length - 1; i >= 0; i--) {
+          const m = cycleMonths[i];
+          const s = client.statusByMonth[m];
+          if (s?.status === MeetingStatus.DONE) {
+            const day = s.customDate || client.startDate;
+            const [year, month] = m.split('-').map(Number);
+            lastDoneDate = new Date(year, month - 1, day);
+            const nextIdx = i + 1;
+            nextMeetingLabel = nextIdx < cycleMonths.length
+              ? (MEETING_LABEL_TEXTS[nextIdx] ?? `${nextIdx + 1}ª Reunião`)
+              : 'Última Reunião';
+            break;
+          }
         }
-      }
 
-      if (!lastDoneDate) return;
+        if (!lastDoneDate) return;
 
-      const nextMeeting = new Date(lastDoneDate);
-      nextMeeting.setDate(nextMeeting.getDate() + 30);
-      nextMeeting.setHours(0, 0, 0, 0);
+        const nextMeeting = new Date(lastDoneDate);
+        nextMeeting.setDate(nextMeeting.getDate() + 30);
+        nextMeeting.setHours(0, 0, 0, 0);
 
-      const diffMs = nextMeeting.getTime() - today.getTime();
-      const daysUntil = Math.round(diffMs / (1000 * 60 * 60 * 24));
+        const diffMs = nextMeeting.getTime() - today.getTime();
+        const daysUntil = Math.round(diffMs / (1000 * 60 * 60 * 24));
 
-      if (daysUntil >= -3 && daysUntil <= 3 && (daysUntil === 7 || daysUntil === 3 || (daysUntil >= -3 && daysUntil <= 3))) {
-        allReminders.push({
-          client,
-          nextMeetingDate: nextMeeting,
-          daysUntil,
-          lastMeetingDate: lastDoneDate.toLocaleDateString('pt-BR'),
-          nextMeetingLabel
-        });
-      }
-    });
+        // Só aparece se a reunião cai em 3 ou 7 dias a partir de HOJE
+        if (daysUntil === 3 || daysUntil === 7) {
+          result.push({
+            client,
+            nextMeetingDate: nextMeeting,
+            daysUntil,
+            lastMeetingDate: lastDoneDate.toLocaleDateString('pt-BR'),
+            nextMeetingLabel
+          });
+        }
+      });
 
-  // Agrupa por dia
-  const remindersByDay = days.map(day => {
-    const dayMs = day.getTime();
-    const items = allReminders.filter(r => r.nextMeetingDate.getTime() === dayMs || (() => {
-      const d = new Date(r.nextMeetingDate);
-      d.setHours(0,0,0,0);
-      return d.getTime() === dayMs;
-    })());
-    return { day, items };
-  }).filter(g => g.items.length > 0);
+    return result;
+  };
 
-  const totalHoje = allReminders.filter(r => r.daysUntil === 0).length;
-  const totalGeral = allReminders.length;
+  const allReminders = getClientReminders();
+
+  // Para cada dia da janela, calcula quem aparece naquele dia
+  // Um cliente aparece num dia D se:
+  //   - sua reunião é em D+3 (lembrete de 3 dias)
+  //   - sua reunião é em D+7 (lembrete de 7 dias)
+  const getDayReminders = (day: Date) => {
+    return clients
+      .filter(c => !isClientInactive(c))
+      .reduce((acc, client) => {
+        const totalMeetings = 5 + (client.extraMeetings ?? 0);
+        const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
+
+        let lastDoneDate: Date | null = null;
+        let nextMeetingLabel = '';
+
+        for (let i = cycleMonths.length - 1; i >= 0; i--) {
+          const m = cycleMonths[i];
+          const s = client.statusByMonth[m];
+          if (s?.status === MeetingStatus.DONE) {
+            const d = s.customDate || client.startDate;
+            const [year, month] = m.split('-').map(Number);
+            lastDoneDate = new Date(year, month - 1, d);
+            const nextIdx = i + 1;
+            nextMeetingLabel = nextIdx < cycleMonths.length
+              ? (MEETING_LABEL_TEXTS[nextIdx] ?? `${nextIdx + 1}ª Reunião`)
+              : 'Última Reunião';
+            break;
+          }
+        }
+
+        if (!lastDoneDate) return acc;
+
+        const nextMeeting = new Date(lastDoneDate);
+        nextMeeting.setDate(nextMeeting.getDate() + 30);
+        nextMeeting.setHours(0, 0, 0, 0);
+
+        const diffFromDay = Math.round(
+          (nextMeeting.getTime() - day.getTime()) / (1000 * 60 * 60 * 24)
+        );
+
+        if (diffFromDay === 3) {
+          acc.tres.push({ client, nextMeetingDate: nextMeeting, lastMeetingDate: lastDoneDate.toLocaleDateString('pt-BR'), nextMeetingLabel });
+        } else if (diffFromDay === 7) {
+          acc.sete.push({ client, nextMeetingDate: nextMeeting, lastMeetingDate: lastDoneDate.toLocaleDateString('pt-BR'), nextMeetingLabel });
+        }
+
+        return acc;
+      }, {
+        tres: [] as Array<{ client: Client; nextMeetingDate: Date; lastMeetingDate: string; nextMeetingLabel: string }>,
+        sete: [] as Array<{ client: Client; nextMeetingDate: Date; lastMeetingDate: string; nextMeetingLabel: string }>
+      });
+  };
+
+  const totalHoje = getDayReminders(today);
+  const totalHojeCount = totalHoje.tres.length + totalHoje.sete.length;
+  const totalGeral = days.reduce((sum, d) => {
+    const r = getDayReminders(d);
+    return sum + r.tres.length + r.sete.length;
+  }, 0);
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
@@ -970,13 +1023,13 @@ const clientsWithAutoSequence = useMemo(() => {
             <CheckCircle2 className="text-yellow-500 w-7 h-7" /> Tarefas do Dia
           </h2>
           <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">
-            Janela de 7 dias • {today.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
+            Lembretes de 3 e 7 dias • Janela de 7 dias
           </p>
         </div>
         <div className="flex gap-3">
           <div className="p-4 bg-yellow-50 rounded-2xl border border-yellow-200 text-center min-w-[100px]">
             <p className="text-[10px] font-black text-yellow-700 uppercase tracking-widest leading-none mb-1">Hoje</p>
-            <p className="text-3xl font-black text-yellow-600">{totalHoje}</p>
+            <p className="text-3xl font-black text-yellow-600">{totalHojeCount}</p>
           </div>
           <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-center min-w-[100px]">
             <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">7 dias</p>
@@ -986,97 +1039,137 @@ const clientsWithAutoSequence = useMemo(() => {
       </div>
 
       {/* NENHUM LEMBRETE */}
-      {remindersByDay.length === 0 && (
+      {totalGeral === 0 && (
         <div className="bg-white p-12 rounded-2xl border shadow-sm text-center">
           <p className="text-4xl mb-4">🎉</p>
-          <p className="text-lg font-black text-slate-700">Nenhum lembrete nos próximos 7 dias!</p>
+          <p className="text-lg font-black text-slate-700">Nenhum lembrete na janela de 7 dias!</p>
           <p className="text-sm text-slate-400 font-medium mt-1">Todos os clientes estão em dia.</p>
         </div>
       )}
 
-      {/* GRUPOS POR DIA */}
-      {remindersByDay.map(({ day, items }) => {
+      {/* CARDS POR DIA */}
+      {days.map(day => {
+        const { tres, sete } = getDayReminders(day);
+        const total = tres.length + sete.length;
+        if (total === 0) return null;
+
         const isToday = day.getTime() === today.getTime();
         const isPast = day.getTime() < today.getTime();
-        const isFuture = day.getTime() > today.getTime();
         const diffDay = Math.round((day.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 
         const dayLabel = isToday
           ? 'HOJE'
           : isPast
           ? `HÁ ${Math.abs(diffDay)} DIA${Math.abs(diffDay) > 1 ? 'S' : ''}`
-          : `EM ${diffDay} DIA${diffDay > 1 ? 'S' : ''}`;
+          : diffDay === 1 ? 'AMANHÃ' : `EM ${diffDay} DIAS`;
 
         return (
-          <div key={day.toISOString()} className="space-y-3">
+          <div key={day.toISOString()} className={`bg-white rounded-2xl border-2 shadow-sm overflow-hidden ${
+            isToday ? 'border-yellow-400' : isPast ? 'border-red-200' : 'border-slate-200'
+          }`}>
 
             {/* HEADER DO DIA */}
-            <div className={`flex items-center gap-3 px-2`}>
-              <div className={`px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest ${
-                isToday
-                  ? 'bg-yellow-500 text-white shadow-md'
-                  : isPast
-                  ? 'bg-red-100 text-red-600'
-                  : 'bg-slate-100 text-slate-500'
-              }`}>
-                {dayLabel}
+            <div className={`px-6 py-4 flex items-center justify-between ${
+              isToday ? 'bg-yellow-500' : isPast ? 'bg-red-50' : 'bg-slate-50'
+            }`}>
+              <div className="flex items-center gap-3">
+                <span className={`text-sm font-black uppercase tracking-widest ${
+                  isToday ? 'text-white' : isPast ? 'text-red-600' : 'text-slate-600'
+                }`}>
+                  {dayLabel}
+                </span>
+                <span className={`text-xs font-bold ${
+                  isToday ? 'text-yellow-100' : isPast ? 'text-red-400' : 'text-slate-400'
+                }`}>
+                  {day.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
+                </span>
               </div>
-              <span className="text-xs font-black text-slate-400 uppercase">
-                {day.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
-              </span>
-              <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                isToday ? 'bg-yellow-50 text-yellow-700' : isPast ? 'bg-red-50 text-red-500' : 'bg-slate-50 text-slate-400'
+              <span className={`text-[10px] font-black px-3 py-1 rounded-full ${
+                isToday ? 'bg-white/20 text-white' : isPast ? 'bg-red-100 text-red-600' : 'bg-white text-slate-500'
               }`}>
-                {items.length} lembrete{items.length > 1 ? 's' : ''}
+                {total} lembrete{total > 1 ? 's' : ''}
               </span>
             </div>
 
-            {/* CARDS DOS CLIENTES */}
-            {items.map(item => (
-              <div key={item.client.id} className={`bg-white p-5 rounded-2xl shadow-sm transition-all border-2 ${
-                isToday
-                  ? 'border-yellow-300 hover:border-yellow-500'
-                  : isPast
-                  ? 'border-red-200 hover:border-red-400'
-                  : 'border-slate-200 hover:border-slate-300'
-              }`}>
-                <div className="flex items-center justify-between flex-wrap gap-4">
-                  <div className="flex items-center gap-4">
-                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-black text-lg shadow-sm flex-shrink-0 text-white ${
-                      isToday ? 'bg-yellow-500' : isPast ? 'bg-red-500' : 'bg-slate-600'
-                    }`}>
-                      {isPast ? '!' : isToday ? '★' : item.client.sequenceInMonth}
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-black text-slate-800 text-base uppercase">{item.client.name}</p>
-                        {isPast && (
-                          <span className="text-[9px] font-black bg-red-100 text-red-600 px-2 py-0.5 rounded-full uppercase">
-                            Não enviado
-                          </span>
-                        )}
-                      </div>
-                      <p className={`text-[11px] font-bold uppercase mt-0.5 ${
-                        isToday ? 'text-yellow-600' : isPast ? 'text-red-500' : 'text-slate-500'
-                      }`}>
-                        {item.nextMeetingLabel} • Reunião em {item.nextMeetingDate.toLocaleDateString('pt-BR')}
-                      </p>
-                      <p className="text-[10px] text-slate-400 font-bold mt-0.5">
-                        Última reunião feita em {item.lastMeetingDate}
-                      </p>
-                    </div>
-                  </div>
-                  <a
-                    href={`https://wa.me/55${item.client.phoneDigits.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá ${item.client.name}! Passando para lembrar que sua próxima reunião de consultoria está chegando. Vamos agendar?`)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white font-black text-xs px-5 py-3 rounded-xl transition-all shadow-sm uppercase"
-                  >
-                    📱 Enviar WhatsApp
-                  </a>
+            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+
+              {/* COLUNA 3 DIAS */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
+                  <span className="text-[10px] font-black uppercase tracking-widest text-red-500">
+                    Lembrete 3 dias — reunião em 3 dias
+                  </span>
+                  <span className="ml-auto text-[10px] font-black bg-red-50 text-red-500 px-2 py-0.5 rounded-full">
+                    {tres.length}
+                  </span>
                 </div>
+                {tres.length === 0 ? (
+                  <p className="text-[11px] text-slate-300 font-bold text-center py-4">Nenhum cliente</p>
+                ) : (
+                  tres.map(item => (
+                    <div key={item.client.id} className="flex items-center justify-between gap-3 p-3 bg-red-50 rounded-xl border border-red-100">
+                      <div className="min-w-0">
+                        <p className="font-black text-slate-800 text-xs uppercase truncate">{item.client.name}</p>
+                        <p className="text-[9px] text-red-500 font-bold mt-0.5">
+                          {item.nextMeetingLabel} • {item.nextMeetingDate.toLocaleDateString('pt-BR')}
+                        </p>
+                        <p className="text-[9px] text-slate-400 font-bold">
+                          Última reunião: {item.lastMeetingDate}
+                        </p>
+                      </div>
+                      <a
+                        href={`https://wa.me/55${item.client.phoneDigits.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá ${item.client.name}! Passando para lembrar que sua próxima reunião de consultoria está chegando. Vamos agendar?`)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-shrink-0 bg-green-500 hover:bg-green-600 text-white text-[10px] font-black px-3 py-2 rounded-lg transition-all"
+                      >
+                        📱 WA
+                      </a>
+                    </div>
+                  ))
+                )}
               </div>
-            ))}
+
+              {/* COLUNA 7 DIAS */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="w-2 h-2 rounded-full bg-yellow-500 flex-shrink-0" />
+                  <span className="text-[10px] font-black uppercase tracking-widest text-yellow-600">
+                    Lembrete 7 dias — reunião em 7 dias
+                  </span>
+                  <span className="ml-auto text-[10px] font-black bg-yellow-50 text-yellow-600 px-2 py-0.5 rounded-full">
+                    {sete.length}
+                  </span>
+                </div>
+                {sete.length === 0 ? (
+                  <p className="text-[11px] text-slate-300 font-bold text-center py-4">Nenhum cliente</p>
+                ) : (
+                  sete.map(item => (
+                    <div key={item.client.id} className="flex items-center justify-between gap-3 p-3 bg-yellow-50 rounded-xl border border-yellow-100">
+                      <div className="min-w-0">
+                        <p className="font-black text-slate-800 text-xs uppercase truncate">{item.client.name}</p>
+                        <p className="text-[9px] text-yellow-600 font-bold mt-0.5">
+                          {item.nextMeetingLabel} • {item.nextMeetingDate.toLocaleDateString('pt-BR')}
+                        </p>
+                        <p className="text-[9px] text-slate-400 font-bold">
+                          Última reunião: {item.lastMeetingDate}
+                        </p>
+                      </div>
+                      <a
+                        href={`https://wa.me/55${item.client.phoneDigits.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá ${item.client.name}! Passando para lembrar que sua próxima reunião de consultoria está chegando. Vamos agendar?`)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-shrink-0 bg-green-500 hover:bg-green-600 text-white text-[10px] font-black px-3 py-2 rounded-lg transition-all"
+                      >
+                        📱 WA
+                      </a>
+                    </div>
+                  ))
+                )}
+              </div>
+
+            </div>
           </div>
         );
       })}
@@ -1084,7 +1177,7 @@ const clientsWithAutoSequence = useMemo(() => {
     </div>
   );
 })()}
-
+        
         {/* ===== ABA: RELATÓRIOS ===== */}
        {activeTab === 'reports' && (
   <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
