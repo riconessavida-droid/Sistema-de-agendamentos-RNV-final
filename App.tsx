@@ -17,7 +17,7 @@ import { supabase } from './supabaseClient';
 
 const SESSION_KEY = 'rnv_current_session';
 
-type TabType = 'overview' | 'checklist' | 'reports' | 'users';
+type TabType = 'overview' | 'checklist' | 'reports' | 'users' | 'tasks';
 type ChecklistSubFilter = 'all' | 'pending' | 'not_done' | 'rescheduled';
 type StatusFilter = 'all' | 'active' | 'finalized' | 'needs_attention';
 
@@ -445,6 +445,73 @@ const clientsWithAutoSequence = useMemo(() => {
   }));
 }, [clients, reportYear]);
 
+  const taskReminders = useMemo(() => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const reminders: Array<{
+    client: Client;
+    nextMeetingDate: Date;
+    daysUntil: number;
+    lastMeetingDate: string;
+    nextMeetingLabel: string;
+  }> = [];
+
+  clients
+    .filter(c => !isClientInactive(c))
+    .forEach(client => {
+      const totalMeetings = 5 + (client.extraMeetings ?? 0);
+      const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
+
+      // Encontra a última reunião DONE em ordem reversa
+      let lastDoneDate: Date | null = null;
+      let nextMeetingLabel = '';
+
+      for (let i = cycleMonths.length - 1; i >= 0; i--) {
+        const m = cycleMonths[i];
+        const s = client.statusByMonth[m];
+        if (s?.status === MeetingStatus.DONE) {
+          const day = s.customDate || client.startDate;
+          const [year, month] = m.split('-').map(Number);
+          lastDoneDate = new Date(year, month - 1, day);
+          // Próxima reunião é a do mês seguinte no ciclo
+          const nextIdx = i + 1;
+          if (nextIdx < cycleMonths.length) {
+            nextMeetingLabel = MEETING_LABEL_TEXTS[nextIdx] ?? `${nextIdx + 1}ª Reunião`;
+          } else {
+            nextMeetingLabel = 'Última Reunião';
+          }
+          break;
+        }
+      }
+
+      // Se não tem nenhuma reunião feita, ignora
+      if (!lastDoneDate) return;
+
+      // Próxima reunião = última feita + 30 dias
+      const nextMeeting = new Date(lastDoneDate);
+      nextMeeting.setDate(nextMeeting.getDate() + 30);
+      nextMeeting.setHours(0, 0, 0, 0);
+
+      const diffMs = nextMeeting.getTime() - today.getTime();
+      const daysUntil = Math.round(diffMs / (1000 * 60 * 60 * 24));
+
+      // Só aparece se faltam exatamente 7 ou 3 dias
+      if (daysUntil === 7 || daysUntil === 3) {
+        reminders.push({
+          client,
+          nextMeetingDate: nextMeeting,
+          daysUntil,
+          lastMeetingDate: lastDoneDate.toLocaleDateString('pt-BR'),
+          nextMeetingLabel
+        });
+      }
+    });
+
+  // Ordena: 3 dias primeiro (mais urgente), depois 7 dias
+  return reminders.sort((a, b) => a.daysUntil - b.daysUntil);
+}, [clients]);
+
   const stats = useMemo(() => {
     const totalAtivos = clients.filter(c => !isClientInactive(c)).length;
     const totalFinalizados = clients.filter(c => isClientInactive(c)).length;
@@ -501,6 +568,7 @@ const clientsWithAutoSequence = useMemo(() => {
           <button onClick={() => setActiveTab('checklist')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'checklist' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Checklist Mensal</button>
           {currentUser.role === UserRole.ADMIN && (
             <>
+              <button onClick={() => setActiveTab('tasks')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'tasks' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Tarefas do Dia</button>
               <button onClick={() => setActiveTab('reports')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'reports' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Relatórios</button>
               <button onClick={() => setActiveTab('users')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'users' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Usuários</button>
             </>
@@ -812,6 +880,120 @@ const clientsWithAutoSequence = useMemo(() => {
             </div>
           </div>
         )}
+
+        {/* ===== ABA: TAREFAS DO DIA ===== */}
+{activeTab === 'tasks' && (
+  <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
+
+    {/* CABEÇALHO */}
+    <div className="bg-white p-6 rounded-2xl border shadow-sm flex items-center justify-between">
+      <div>
+        <h2 className="text-xl font-black flex items-center gap-3 text-slate-800">
+          <CheckCircle2 className="text-yellow-500 w-7 h-7" /> Tarefas do Dia
+        </h2>
+        <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">
+          Lembretes para enviar hoje — {new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
+        </p>
+      </div>
+      <div className="p-4 bg-yellow-50 rounded-2xl border border-yellow-200 text-center min-w-[120px]">
+        <p className="text-[10px] font-black text-yellow-700 uppercase tracking-widest leading-none mb-1">
+          Total Hoje
+        </p>
+        <p className="text-3xl font-black text-yellow-600">
+          {taskReminders.length}
+        </p>
+      </div>
+    </div>
+
+    {/* NENHUM LEMBRETE */}
+    {taskReminders.length === 0 && (
+      <div className="bg-white p-12 rounded-2xl border shadow-sm text-center">
+        <p className="text-4xl mb-4">🎉</p>
+        <p className="text-lg font-black text-slate-700">Nenhum lembrete para hoje!</p>
+        <p className="text-sm text-slate-400 font-medium mt-1">Todos os clientes estão em dia.</p>
+      </div>
+    )}
+
+    {/* URGENTE — 3 DIAS */}
+    {taskReminders.filter(r => r.daysUntil === 3).length > 0 && (
+      <div className="space-y-3">
+        <h3 className="text-[10px] font-black uppercase tracking-widest text-red-500 flex items-center gap-2 px-2">
+          <AlertCircle className="w-4 h-4" /> Lembrete Urgente — Reunião em 3 dias ({taskReminders.filter(r => r.daysUntil === 3).length})
+        </h3>
+        {taskReminders
+          .filter(r => r.daysUntil === 3)
+          .map(item => (
+            <div key={item.client.id} className="bg-white border-2 border-red-200 p-5 rounded-2xl shadow-sm hover:border-red-400 transition-all">
+              <div className="flex items-center justify-between flex-wrap gap-4">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-red-500 text-white rounded-xl flex items-center justify-center font-black text-lg shadow-sm flex-shrink-0">
+                    3
+                  </div>
+                  <div>
+                    <p className="font-black text-slate-800 text-base uppercase">{item.client.name}</p>
+                    <p className="text-[11px] font-bold text-red-500 uppercase mt-0.5">
+                      {item.nextMeetingLabel} prevista para {item.nextMeetingDate.toLocaleDateString('pt-BR')}
+                    </p>
+                    <p className="text-[10px] text-slate-400 font-bold mt-0.5">
+                      Última reunião feita em {item.lastMeetingDate}
+                    </p>
+                  </div>
+                </div>
+                <a
+                  href={`https://wa.me/55${item.client.phoneDigits.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá ${item.client.name}! Passando para lembrar que sua próxima reunião de consultoria está chegando. Vamos agendar?`)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white font-black text-xs px-5 py-3 rounded-xl transition-all shadow-sm uppercase"
+                >
+                  📱 Enviar WhatsApp
+                </a>
+              </div>
+            </div>
+          ))}
+      </div>
+    )}
+
+    {/* ANTECIPADO — 7 DIAS */}
+    {taskReminders.filter(r => r.daysUntil === 7).length > 0 && (
+      <div className="space-y-3">
+        <h3 className="text-[10px] font-black uppercase tracking-widest text-yellow-600 flex items-center gap-2 px-2">
+          <Clock className="w-4 h-4" /> Lembrete Antecipado — Reunião em 7 dias ({taskReminders.filter(r => r.daysUntil === 7).length})
+        </h3>
+        {taskReminders
+          .filter(r => r.daysUntil === 7)
+          .map(item => (
+            <div key={item.client.id} className="bg-white border-2 border-yellow-200 p-5 rounded-2xl shadow-sm hover:border-yellow-400 transition-all">
+              <div className="flex items-center justify-between flex-wrap gap-4">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-yellow-500 text-white rounded-xl flex items-center justify-center font-black text-lg shadow-sm flex-shrink-0">
+                    7
+                  </div>
+                  <div>
+                    <p className="font-black text-slate-800 text-base uppercase">{item.client.name}</p>
+                    <p className="text-[11px] font-bold text-yellow-600 uppercase mt-0.5">
+                      {item.nextMeetingLabel} prevista para {item.nextMeetingDate.toLocaleDateString('pt-BR')}
+                    </p>
+                    <p className="text-[10px] text-slate-400 font-bold mt-0.5">
+                      Última reunião feita em {item.lastMeetingDate}
+                    </p>
+                  </div>
+                </div>
+                <a
+                  href={`https://wa.me/55${item.client.phoneDigits.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá ${item.client.name}! Passando para lembrar que sua próxima reunião de consultoria está chegando. Vamos agendar?`)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white font-black text-xs px-5 py-3 rounded-xl transition-all shadow-sm uppercase"
+                >
+                  📱 Enviar WhatsApp
+                </a>
+              </div>
+            </div>
+          ))}
+      </div>
+    )}
+
+  </div>
+)}
 
         {/* ===== ABA: RELATÓRIOS ===== */}
        {activeTab === 'reports' && (
