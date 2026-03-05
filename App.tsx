@@ -42,7 +42,8 @@ const dbToClient = (row: DbClientRow): Client => ({
   sequenceInMonth: row.sequence_in_month,
   groupColor: row.group_color,
   statusByMonth: row.status_by_month || {},
-  extraMeetings: row.extra_meetings ?? 0
+  extraMeetings: row.extra_meetings ?? 0,
+  closedAt: (row as any).closed_at ?? undefined
 });
 
 const clientToDb = (client: Client) => ({
@@ -54,7 +55,8 @@ const clientToDb = (client: Client) => ({
   sequence_in_month: client.sequenceInMonth,
   group_color: client.groupColor,
   status_by_month: client.statusByMonth || {},
-  extra_meetings: client.extraMeetings ?? 0
+  extra_meetings: client.extraMeetings ?? 0,
+  closed_at: client.closedAt ?? null   // ✅ linha nova
 });
 
 const toMonthKey = (d: Date) =>
@@ -272,32 +274,46 @@ const App: React.FC = () => {
   };
 
   const updateMeetingData = async (
-    clientId: string,
-    monthYear: string,
-    updates: Partial<{ status: MeetingStatus; customDate?: number }>
-  ) => {
-    const before = clients.find(c => c.id === clientId);
-    if (!before) return;
-    const currentData = before.statusByMonth[monthYear] || { status: MeetingStatus.PENDING };
-    const afterClient: Client = {
-      ...before,
-      statusByMonth: {
-        ...before.statusByMonth,
-        [monthYear]: { ...currentData, ...updates }
+  clientId: string,
+  monthYear: string,
+  updates: Partial<{ status: MeetingStatus; customDate?: number }>
+) => {
+  const client = clients.find(c => c.id === clientId);
+  if (!client) return;
+
+  // ✅ NOVO: se está marcando como Contrato Encerrado,
+  // guarda a data de hoje. Se não, mantém o que já tinha.
+  const closedAt =
+    updates.status === MeetingStatus.CLOSED_CONTRACT
+      ? new Date().toISOString().split('T')[0]  // ex: "2026-03-05"
+      : client.closedAt;                         // mantém a data anterior
+
+  const updatedClient = {
+    ...client,
+    closedAt,   // ✅ NOVO: inclui a data de encerramento
+    statusByMonth: {
+      ...client.statusByMonth,
+      [monthYear]: {
+        ...client.statusByMonth[monthYear],
+        ...updates
       }
-    };
-    setClients(prev => prev.map(c => (c.id === clientId ? afterClient : c)));
-    const { error } = await supabase
-      .from('clients')
-      .update({ status_by_month: afterClient.statusByMonth })
-      .eq('id', clientId);
-    if (error) {
-      console.error('Erro ao atualizar status_by_month:', error);
-      setClients(prev => prev.map(c => (c.id === clientId ? before : c)));
-      alert(`Erro ao salvar status no Supabase: ${error.message}`);
     }
   };
 
+    setClients(prev => prev.map(c => c.id === clientId ? updatedClient : c));
+
+  const { error } = await supabase
+    .from('clients')
+    .update(clientToDb(updatedClient))
+    .eq('id', clientId);
+
+  if (error) {
+    console.error('Erro ao atualizar reunião:', error);
+    setClients(prev => prev.map(c => c.id === clientId ? client : c));
+    alert(`Erro ao atualizar reunião no Supabase: ${error.message}`);
+  }
+};
+  
   const addMoreMonth = () => {
     const last = visibleMonths[visibleMonths.length - 1];
     const next = getNextMonths(last, 2)[1];
@@ -587,11 +603,16 @@ const clientsWithAutoSequence = useMemo(() => {
                                 <p className="text-[10px] font-black opacity-50 mt-0.5">
                                   Início: {getMonthLabel(client.startMonthYear)}
                                 </p>
-                                {orange && (
-                                  <span className="text-[8px] font-black bg-white/20 px-2 py-0.5 rounded-full uppercase mt-1 inline-block">
-                                    Atenção Necessária
-                                  </span>
-                                )}
+                               {orange && (
+  <span className="text-[8px] font-black bg-white/20 px-2 py-0.5 rounded-full uppercase mt-1 inline-block">
+    Atenção Necessária
+  </span>
+)}
+{inactive && client.closedAt && (
+  <p className="text-[9px] text-slate-400 font-medium mt-0.5">
+    Encerrado em {new Date(client.closedAt + 'T12:00:00').toLocaleDateString('pt-BR')}
+  </p>
+)}
                               </div>
 
                               {/* BOTÕES DIREITA */}
@@ -880,7 +901,7 @@ const clientsWithAutoSequence = useMemo(() => {
                       style={{ height: `${heightPercent}%`, minHeight: '8px' }}
                       className={`w-full rounded-t-xl transition-all duration-700 ${
                         isCurrentMonth
-                          ? 'bg-gradient-to-t from-yellow-600 to-amber-400 shadow-lg shadow-yellow-500/40ring-1 ring-yellow-600'
+                          ? 'bg-gradient-to-t from-yellow-600 to-amber-400 shadow-lg shadow-yellow-500/40 ring-1 ring-yellow-600'
                           : 'bg-gradient-to-t from-slate-700 to-slate-500 group-hover:from-yellow-600 group-hover:to-yellow-400'
                       }`}
                     />
