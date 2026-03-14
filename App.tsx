@@ -4,7 +4,7 @@ import {
   CheckCircle2, XCircle, Trash2, Pencil,
   X, LogOut, ClipboardCheck, Clock, ChevronLeft,
   AlertCircle, UserPlus, Trophy,
-  CheckSquare, Download, UserCog
+  CheckSquare, Download, UserCog, Bell, FileSignature
 } from 'lucide-react';
 import { Client, MeetingStatus, User, UserRole } from './types';
 import {
@@ -29,8 +29,10 @@ type DbClientRow = {
   start_date: number;
   sequence_in_month: number;
   group_color: string;
-  status_by_month: Record<string, { status: MeetingStatus; customDate?: number }>;
+  status_by_month: Record<string, { status: MeetingStatus; customDate?: number; notified?: boolean }>;
   extra_meetings: number;
+  closed_at?: string;
+  contract_signed?: boolean;
 };
 
 const dbToClient = (row: DbClientRow): Client => ({
@@ -43,7 +45,8 @@ const dbToClient = (row: DbClientRow): Client => ({
   groupColor: row.group_color,
   statusByMonth: row.status_by_month || {},
   extraMeetings: row.extra_meetings ?? 0,
-  closedAt: (row as any).closed_at ?? undefined
+  closedAt: row.closed_at ?? undefined,
+  contractSigned: row.contract_signed ?? false
 });
 
 const clientToDb = (client: Client) => ({
@@ -56,7 +59,8 @@ const clientToDb = (client: Client) => ({
   group_color: client.groupColor,
   status_by_month: client.statusByMonth || {},
   extra_meetings: client.extraMeetings ?? 0,
-  closed_at: client.closedAt ?? null   // ✅ linha nova
+  closed_at: client.closedAt ?? null,
+  contract_signed: client.contractSigned ?? false
 });
 
 const toMonthKey = (d: Date) =>
@@ -276,7 +280,7 @@ const App: React.FC = () => {
   const updateMeetingData = async (
   clientId: string,
   monthYear: string,
-  updates: Partial<{ status: MeetingStatus; customDate?: number }>
+  updates: Partial<{ status: MeetingStatus; customDate?: number; notified?: boolean }>
 ) => {
   const client = clients.find(c => c.id === clientId);
   if (!client) return;
@@ -386,7 +390,8 @@ const clientsWithAutoSequence = useMemo(() => {
           meetingIdx,
           meetingLabel: MEETING_LABEL_TEXTS[meetingIdx] ?? `${meetingIdx + 1}ª Reunião`,
           status: statusData?.status || MeetingStatus.PENDING,
-          doneDate: statusData?.customDate || client.startDate
+          doneDate: statusData?.customDate || client.startDate,
+          notified: statusData?.notified ?? false
         });
       }
       return acc;
@@ -396,6 +401,7 @@ const clientsWithAutoSequence = useMemo(() => {
       meetingLabel: string;
       status: MeetingStatus;
       doneDate: number;
+      notified: boolean;
     }>);
 
     const pendingAll = activeThisMonth.filter(item =>
@@ -566,9 +572,9 @@ const clientsWithAutoSequence = useMemo(() => {
         <div className="max-w-[1600px] mx-auto px-4 flex gap-8">
           <button onClick={() => setActiveTab('overview')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'overview' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Visão Geral</button>
           <button onClick={() => setActiveTab('checklist')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'checklist' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Checklist Mensal</button>
+          <button onClick={() => setActiveTab('tasks')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'tasks' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Tarefas do Dia</button>
           {currentUser.role === UserRole.ADMIN && (
             <>
-              <button onClick={() => setActiveTab('tasks')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'tasks' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Tarefas do Dia</button>
               <button onClick={() => setActiveTab('reports')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'reports' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Relatórios</button>
               <button onClick={() => setActiveTab('users')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'users' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Usuários</button>
             </>
@@ -671,6 +677,18 @@ const clientsWithAutoSequence = useMemo(() => {
                                 <p className="text-[10px] font-black opacity-50 mt-0.5">
                                   Início: {getMonthLabel(client.startMonthYear)}
                                 </p>
+                                <button
+                                  onClick={() => updateClient(client.id, { contractSigned: !client.contractSigned })}
+                                  className={`text-[8px] font-black px-2 py-0.5 rounded-full uppercase mt-1 inline-flex items-center gap-1 transition-all ${
+                                    client.contractSigned
+                                      ? orange ? 'bg-white/30 text-white' : 'bg-green-100 text-green-700 border border-green-300'
+                                      : orange ? 'bg-white/10 text-white/70 border border-white/30' : 'bg-yellow-50 text-yellow-700 border border-yellow-300'
+                                  }`}
+                                  title={client.contractSigned ? 'Contrato assinado (clique para alterar)' : 'Contrato pendente (clique para marcar como assinado)'}
+                                >
+                                  <FileSignature className="w-2.5 h-2.5" />
+                                  {client.contractSigned ? 'Contrato Assinado' : 'Contrato Pendente'}
+                                </button>
                                {orange && (
   <span className="text-[8px] font-black bg-white/20 px-2 py-0.5 rounded-full uppercase mt-1 inline-block">
     Atenção Necessária
@@ -835,16 +853,31 @@ const clientsWithAutoSequence = useMemo(() => {
                   </div>
                 )}
                 {checklistData.pending.map((item: any) => (
-                  <div key={item.client.id} className="bg-white p-4 rounded-xl border shadow-sm flex items-center justify-between group hover:border-yellow-200 transition-all">
+                  <div key={item.client.id} className={`bg-white p-4 rounded-xl border shadow-sm flex items-center justify-between group hover:border-yellow-200 transition-all ${item.notified ? 'border-blue-200 bg-blue-50/30' : ''}`}>
                     <div className="flex items-center gap-4">
                       <div className="w-10 h-10 bg-slate-800 text-white rounded-lg flex items-center justify-center font-black text-xs">{item.client.sequenceInMonth}</div>
                       <div>
-                        <p className="font-bold text-slate-800 text-sm uppercase">{item.client.name}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="font-bold text-slate-800 text-sm uppercase">{item.client.name}</p>
+                          <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-full uppercase ${item.client.contractSigned ? 'bg-green-100 text-green-700' : 'bg-yellow-50 text-yellow-700 border border-yellow-200'}`}>
+                            {item.client.contractSigned ? '✓ Assinado' : '⏳ Pendente'}
+                          </span>
+                        </div>
                         <p className="text-[10px] font-black text-yellow-600 uppercase">{item.meetingLabel} • Ideal: Dia {item.client.startDate}</p>
                         <p className="text-[10px] text-slate-400 font-bold">{item.client.phoneDigits}</p>
+                        {item.notified && (
+                          <span className="text-[9px] font-black text-blue-500 uppercase tracking-wide">✓ Avisado</span>
+                        )}
                       </div>
                     </div>
                     <div className="flex gap-2">
+                      <button
+                        onClick={() => updateMeetingData(item.client.id, checklistMonth, { notified: !item.notified })}
+                        className={`p-2 rounded-lg transition-all ${item.notified ? 'bg-blue-500 text-white' : 'bg-slate-50 text-slate-400 hover:bg-blue-50 hover:text-blue-500'}`}
+                        title={item.notified ? 'Avisado ✓ (clique para desfazer)' : 'Marcar como avisado'}
+                      >
+                        <Bell className="w-5 h-5" />
+                      </button>
                       <button onClick={() => updateMeetingData(item.client.id, checklistMonth, { status: MeetingStatus.DONE, customDate: new Date().getDate() })} className="p-2 bg-green-50 text-green-600 rounded-lg hover:bg-green-500 hover:text-white transition-all" title="Marcar como realizada">
                         <CheckCircle2 className="w-5 h-5" />
                       </button>
