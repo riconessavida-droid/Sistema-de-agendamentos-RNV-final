@@ -83,7 +83,7 @@ const App: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
   const [checklistMonth, setChecklistMonth] = useState<string>(() => toMonthKey(new Date()));
   const [checklistSubFilter, setChecklistSubFilter] = useState<ChecklistSubFilter>('all');
-  const [reportYear, setReportYear] = useState<number>(2025);
+  const [reportYear, setReportYear] = useState<number>(new Date().getFullYear());
 
   const [visibleMonths, setVisibleMonths] = useState<string[]>(() => {
     const months: string[] = [];
@@ -689,11 +689,6 @@ const clientsWithAutoSequence = useMemo(() => {
                                   <FileSignature className="w-2.5 h-2.5" />
                                   {client.contractSigned ? 'Contrato Assinado' : 'Contrato Pendente'}
                                 </button>
-                               {orange && (
-  <span className="text-[8px] font-black bg-white/20 px-2 py-0.5 rounded-full uppercase mt-1 inline-block">
-    Atenção Necessária
-  </span>
-)}
 {inactive && client.closedAt && (
   <p className="text-[9px] text-slate-400 font-medium mt-0.5">
     Encerrado em {new Date(client.closedAt + 'T12:00:00').toLocaleDateString('pt-BR')}
