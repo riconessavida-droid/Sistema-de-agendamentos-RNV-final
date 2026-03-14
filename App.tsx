@@ -783,6 +783,14 @@ const clientsWithAutoSequence = useMemo(() => {
                                         <option key={o.value} value={o.value}>{o.label}</option>
                                       ))}
                                     </select>
+                                    <button
+                                      onClick={() => updateMeetingData(client.id, m, { notified: !s?.notified })}
+                                      className={`w-full text-[8px] font-black py-1 rounded flex items-center justify-center gap-1 transition-all ${s?.notified ? 'bg-blue-500 text-white' : 'bg-slate-50 text-slate-400 hover:bg-blue-50 hover:text-blue-500 border border-slate-200'}`}
+                                      title={s?.notified ? 'Cliente avisado ✓ (clique para desfazer)' : 'Marcar como avisado'}
+                                    >
+                                      <Bell className="w-3 h-3" />
+                                      {s?.notified ? 'Avisado ✓' : 'Avisar'}
+                                    </button>
                                   </div>
                                 )}
                               </td>
