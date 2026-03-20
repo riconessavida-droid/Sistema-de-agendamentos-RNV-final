@@ -61,3 +61,12 @@ export interface ClientBilling {
   amount: number;         // Valor a receber (inteiro ou proporcional)
   isProportional?: boolean;  // Se foi encerrado antecipadamente
 }
+
+export interface Client {
+  // ... campos existentes ...
+  closedAt?: string;
+  contractSigned?: boolean;
+  
+  // ✅ NOVO — guardar valor do contrato na data de início
+  contractValue?: number;  // Valor que o cliente vai pagar (fixado na data de início)
+}
