@@ -6,7 +6,7 @@ import {
   AlertCircle, UserPlus, Trophy,
   CheckSquare, Download, UserCog, Bell, FileSignature
 } from 'lucide-react';
-import { Client, MeetingStatus, User, UserRole } from './types';
+import { Client, MeetingStatus, User, UserRole, BillingConfig, ClientBilling } from './types';
 import {
   STATUS_OPTIONS, GROUP_COLORS, getNextMonths, getMonthLabel, MEETING_LABEL_TEXTS
 } from './constants';
@@ -17,7 +17,7 @@ import { supabase } from './supabaseClient';
 
 const SESSION_KEY = 'rnv_current_session';
 
-type TabType = 'overview' | 'checklist' | 'reports' | 'users' | 'tasks';
+type TabType = 'overview' | 'checklist' | 'reports' | 'users' | 'tasks' | 'billing';
 type ChecklistSubFilter = 'all' | 'pending' | 'not_done' | 'rescheduled';
 type StatusFilter = 'all' | 'active' | 'finalized' | 'needs_attention';
 
@@ -84,6 +84,10 @@ const App: React.FC = () => {
   const [checklistMonth, setChecklistMonth] = useState<string>(() => toMonthKey(new Date()));
   const [checklistSubFilter, setChecklistSubFilter] = useState<ChecklistSubFilter>('all');
   const [reportYear, setReportYear] = useState<number>(new Date().getFullYear());
+  const [billingConfig, setBillingConfig] = useState<BillingConfig>({ contractValue: 1599, machineRate: 10 });
+const [loadingBillingConfig, setLoadingBillingConfig] = useState(false);
+const [editingBillingValue, setEditingBillingValue] = useState<{ clientId: string; value: string } | null>(null);
+const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 'PENDING' | 'PAID'>>({});
 
   const [visibleMonths, setVisibleMonths] = useState<string[]>(() => {
     const months: string[] = [];
@@ -132,6 +136,37 @@ const App: React.FC = () => {
       setLoadingClients(false);
     };
     loadClients();
+  }, [currentUser]);
+
+  useEffect(() => {
+    const loadBillingConfig = async () => {
+      if (!currentUser || currentUser.role !== UserRole.ADMIN) return;
+      
+      setLoadingBillingConfig(true);
+      const { data, error } = await supabase
+        .from('billing_config')
+        .select('*')
+        .single();
+      
+      if (!error && data) {
+        setBillingConfig({
+          contractValue: data.contract_value,
+          machineRate: data.machine_rate
+        });
+      } else {
+        // Se não existir, cria com valores padrão
+        const defaultConfig = { contractValue: 1599, machineRate: 10 };
+        await supabase.from('billing_config').insert({
+          contract_value: defaultConfig.contractValue,
+          machine_rate: defaultConfig.machineRate
+        });
+        setBillingConfig(defaultConfig);
+      }
+      
+      setLoadingBillingConfig(false);
+    };
+    
+    loadBillingConfig();
   }, [currentUser]);
 
   useEffect(() => {
@@ -257,6 +292,29 @@ const App: React.FC = () => {
       setClients(prev => prev.map(c => c.id === id ? before : c));
       alert(`Erro ao salvar reunião extra: ${error.message}`);
     }
+  };
+
+  const updateBillingConfig = async (newConfig: BillingConfig) => {
+    setBillingConfig(newConfig);
+    
+    const { error } = await supabase
+      .from('billing_config')
+      .update({
+        contract_value: newConfig.contractValue,
+        machine_rate: newConfig.machineRate
+      })
+      .eq('id', 1);
+    
+    if (error) {
+      console.error('Erro ao atualizar billing config:', error);
+      alert(`Erro ao salvar configuração: ${error.message}`);
+    }
+  };
+
+  const updateClientBillingStatus = async (clientId: string, status: 'PENDING' | 'PAID') => {
+    setBillingPaymentStatus(prev => ({ ...prev, [clientId]: status }));
+    
+    // Aqui você pode adicionar lógica para salvar no Supabase se necessário
   };
 
   const deleteClient = async (id: string) => {
@@ -451,6 +509,72 @@ const clientsWithAutoSequence = useMemo(() => {
   }));
 }, [clients, reportYear]);
 
+  const billingData = useMemo(() => {
+  const calculatedValue = billingConfig.contractValue - (billingConfig.contractValue * billingConfig.machineRate / 100);
+  
+  // Cria array com todos os meses do ano
+  const months: string[] = [];
+  for (let m = 1; m <= 12; m++) {
+    months.push(`${new Date().getFullYear()}-${String(m).padStart(2, '0')}`);
+  }
+  
+  // Para cada cliente, calcula os 5 meses de faturamento
+  const billingByMonth: Record<string, Array<{ clientId: string; clientName: string; amount: number; isProportional: boolean }>> = {};
+  
+  months.forEach(m => {
+    billingByMonth[m] = [];
+  });
+  
+  clients.forEach(client => {
+    const totalMeetings = 5 + (client.extraMeetings ?? 0);
+    const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
+    
+    // Verifica se cliente foi encerrado
+    const isInactive = isClientInactive(client);
+    const closedAtDate = client.closedAt ? new Date(client.closedAt + 'T12:00:00') : null;
+    
+    // Se encerrado, calcula quantos meses durou
+    let monthsCompleted = 5;
+    if (isInactive && closedAtDate) {
+      const startDate = new Date(client.startMonthYear + '-01');
+      const diffTime = closedAtDate.getTime() - startDate.getTime();
+      monthsCompleted = Math.ceil(diffTime / (1000 * 60 * 60 * 24 * 30));
+    }
+    
+    // Lança valor em cada um dos 5 meses (ou proporcional se encerrado)
+    cycleMonths.slice(0, 5).forEach((monthKey, idx) => {
+      if (billingByMonth[monthKey]) {
+        let amount = calculatedValue;
+        let isProportional = false;
+        
+        // Se encerrado, calcula proporcional
+        if (isInactive && idx + 1 > monthsCompleted) {
+          amount = 0; // Meses após encerramento = 0
+        } else if (isInactive && idx + 1 === monthsCompleted) {
+          // Mês de encerramento: proporcional
+          amount = (calculatedValue / 5) * monthsCompleted;
+          isProportional = true;
+        }
+        
+        billingByMonth[monthKey].push({
+          clientId: client.id,
+          clientName: client.name,
+          amount,
+          isProportional
+        });
+      }
+    });
+  });
+  
+  // Calcula totais por mês
+  const totals: Record<string, number> = {};
+  months.forEach(m => {
+    totals[m] = billingByMonth[m].reduce((sum, item) => sum + item.amount, 0);
+  });
+  
+  return { billingByMonth, totals, calculatedValue, months };
+}, [clients, billingConfig]);
+
   const taskReminders = useMemo(() => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -576,6 +700,7 @@ const clientsWithAutoSequence = useMemo(() => {
           {currentUser.role === UserRole.ADMIN && (
             <>
               <button onClick={() => setActiveTab('reports')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'reports' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Relatórios</button>
+              <button onClick={() => setActiveTab('billing')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'billing' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Faturamento</button>
               <button onClick={() => setActiveTab('users')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'users' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Usuários</button>
             </>
           )}
@@ -1213,6 +1338,317 @@ const clientsWithAutoSequence = useMemo(() => {
     </div>
   );
 })()}
+
+        {/* ===== ABA: FATURAMENTO ===== */}
+{activeTab === 'billing' && currentUser.role === UserRole.ADMIN && (
+  <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
+    
+    {/* CABEÇALHO + CONFIG */}
+    <div className="bg-white p-6 rounded-2xl border shadow-sm space-y-4">
+      <h2 className="text-xl font-black flex items-center gap-3 text-slate-800">
+        <FileSignature className="text-yellow-500 w-7 h-7" /> Faturamento
+      </h2>
+      
+      {/* CARDS DE CONFIG */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* Valor do Contrato */}
+        <div className="bg-slate-50 p-4 rounded-xl border">
+          <label className="text-[10px] font-black text-slate-400 uppercase block mb-2">Valor do Contrato</label>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-black text-slate-600">R$</span>
+            <input
+              type="number"
+              value={billingConfig.contractValue}
+              onChange={e => updateBillingConfig({ ...billingConfig, contractValue: parseFloat(e.target.value) || 0 })}
+              className="flex-1 bg-white border rounded px-2 py-1 font-black text-sm outline-none focus:ring-2 focus:ring-yellow-500"
+              step="0.01"
+            />
+          </div>
+        </div>
+
+        {/* Taxa da Maquininha */}
+        <div className="bg-slate-50 p-4 rounded-xl border">
+          <label className="text-[10px] font-black text-slate-400 uppercase block mb-2">Taxa Maquininha</label>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              value={billingConfig.machineRate}
+              onChange={e => updateBillingConfig({ ...billingConfig, machineRate: parseFloat(e.target.value) || 0 })}
+              className="flex-1 bg-white border rounded px-2 py-1 font-black text-sm outline-none focus:ring-2 focus:ring-yellow-500"
+              step="0.01"
+              min="0"
+              max="100"
+            />
+            <span className="text-sm font-black text-slate-600">%</span>
+          </div>
+        </div>
+
+        {/* Valor Final */}
+        <div className="bg-yellow-50 p-4 rounded-xl border border-yellow-200">
+          <label className="text-[10px] font-black text-yellow-700 uppercase block mb-2">Valor por Cliente</label>
+          <p className="text-lg font-black text-yellow-600">
+            R$ {billingData.calculatedValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </p>
+        </div>
+      </div>
+    </div>
+
+    {/* RESUMO FINANCEIRO */}
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="bg-white p-6 rounded-2xl border shadow-sm">
+        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">A Receber (Total)</p>
+        <p className="text-3xl font-black text-slate-800">
+          R$ {Object.values(billingData.totals).reduce((a, b) => a + b, 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        </p>
+      </div>
+
+      <div className="bg-white p-6 rounded-2xl border shadow-sm">
+        <p className="text-[10px] font-black text-red-500 uppercase tracking-widest mb-2">Pendente de Cobrar</p>
+        <p className="text-3xl font-black text-red-600">
+          R$ {clients
+            .filter(c => billingPaymentStatus[c.id] === 'PENDING' || !billingPaymentStatus[c.id])
+            .reduce((sum, c) => {
+              const totalMeetings = 5 + (c.extraMeetings ?? 0);
+              const cycleMonths = getNextMonths(c.startMonthYear, totalMeetings);
+              const paymentMonth = cycleMonths[4];
+              return sum + (billingData.billingByMonth[paymentMonth]?.find(b => b.clientId === c.id)?.amount || 0);
+            }, 0)
+            .toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        </p>
+      </div>
+
+      <div className="bg-white p-6 rounded-2xl border shadow-sm">
+        <p className="text-[10px] font-black text-green-600 uppercase tracking-widest mb-2">Já Recebido</p>
+        <p className="text-3xl font-black text-green-600">
+          R$ {clients
+            .filter(c => billingPaymentStatus[c.id] === 'PAID')
+            .reduce((sum, c) => {
+              const totalMeetings = 5 + (c.extraMeetings ?? 0);
+              const cycleMonths = getNextMonths(c.startMonthYear, totalMeetings);
+              const paymentMonth = cycleMonths[4];
+              return sum + (billingData.billingByMonth[paymentMonth]?.find(b => b.clientId === c.id)?.amount || 0);
+            }, 0)
+            .toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        </p>
+      </div>
+    </div>
+
+    {/* TABELA DE FATURAMENTO */}
+    <div className="bg-white border rounded-2xl shadow-xl overflow-hidden">
+      <div className="p-4 border-b bg-slate-50 flex items-center justify-between">
+        <h3 className="font-bold text-slate-800 uppercase text-xs tracking-widest">Faturamento Mensal</h3>
+      </div>
+
+      <div className="max-h-[70vh] overflow-auto">
+        <table className="w-full border-collapse">
+          <thead>
+            <tr className="bg-slate-50 border-b sticky top-0 z-30">
+              <th className="px-6 py-4 text-left text-xs font-black text-slate-400 uppercase sticky left-0 bg-slate-50 z-40 w-80 shadow-md">Cliente</th>
+              {billingData.months.map(m => (
+                <th key={m} className="px-4 py-4 text-center text-[10px] font-black text-slate-400 uppercase border-l w-48 min-w-[200px]">
+                  {new Date(m + '-01').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
+                </th>
+              ))}
+            </tr>
+          </thead>
+
+          <tbody className="divide-y divide-slate-200">
+            {/* LINHAS DE CLIENTES */}
+            {clients
+              .filter(c => !isClientInactive(c))
+              .sort((a, b) => a.startMonthYear.localeCompare(b.startMonthYear) || a.startDate - b.startDate)
+              .map(client => {
+                const totalMeetings = 5 + (client.extraMeetings ?? 0);
+                const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
+                const paymentMonth = cycleMonths[4];
+
+                return (
+                  <tr key={client.id} className="hover:bg-slate-50/50 transition-colors">
+                    {/* CLIENTE */}
+                    <td className="px-6 py-4 sticky left-0 z-20 w-80 border-r shadow-sm bg-white">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-slate-800 text-white flex items-center justify-center font-black text-xs flex-shrink-0">
+                          {client.sequenceInMonth}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-slate-800 text-sm uppercase truncate">{client.name}</p>
+                          <p className="text-[10px] text-slate-400">Desde: {getMonthLabel(client.startMonthYear)}</p>
+                        </div>
+                      </div>
+                    </td>
+
+                    {/* MESES */}
+                    {billingData.months.map(m => {
+                      const clientBillingThisMonth = billingData.billingByMonth[m]?.find(b => b.clientId === client.id);
+                      const amount = clientBillingThisMonth?.amount || 0;
+                      const isPaymentMonth = m === paymentMonth;
+                      const paymentStatus = billingPaymentStatus[client.id] || 'PENDING';
+                      const isEditing = editingBillingValue?.clientId === client.id && editingBillingValue.value;
+
+                      return (
+                        <td
+                          key={m}
+                          className={`px-4 py-4 border-l text-center ${
+                            isPaymentMonth ? 'bg-yellow-50' : amount > 0 ? 'bg-white' : 'bg-slate-50/30 opacity-30'
+                          }`}
+                        >
+                          {amount > 0 && (
+                            <div className="flex flex-col gap-2">
+                              {/* BOLINHA DE PAGAMENTO (só no mês de pagamento) */}
+                              {isPaymentMonth && (
+                                <button
+                                  onClick={() => updateClientBillingStatus(client.id, paymentStatus === 'PENDING' ? 'PAID' : 'PENDING')}
+                                  className={`mx-auto w-6 h-6 rounded-full transition-all ${
+                                    paymentStatus === 'PAID'
+                                      ? 'bg-green-500 border-2 border-green-600 shadow-sm'
+                                      : 'bg-red-500 border-2 border-red-600 shadow-sm hover:bg-red-600'
+                                  }`}
+                                  title={paymentStatus === 'PAID' ? 'Pago ✓' : 'Não pago - clique para marcar como pago'}
+                                />
+                              )}
+
+                              {/* VALOR EDITÁVEL */}
+                              {isEditing ? (
+                                <div className="flex gap-1">
+                                  <input
+                                    type="number"
+                                    value={editingBillingValue.value}
+                                    onChange={e => setEditingBillingValue({ ...editingBillingValue, value: e.target.value })}
+                                    className="flex-1 bg-white border border-yellow-500 rounded px-1 py-0.5 font-black text-xs text-center outline-none"
+                                    autoFocus
+                                  />
+                                  <button
+                                    onClick={() => {
+                                      // Salvar novo valor
+                                      const newAmount = parseFloat(editingBillingValue.value) || amount;
+                                      setEditingBillingValue(null);
+                                      // TODO: Salvar no Supabase se necessário
+                                    }}
+                                    className="bg-green-500 text-white px-2 py-0.5 rounded text-[10px] font-black hover:bg-green-600"
+                                  >
+                                    ✓
+                                  </button>
+                                  <button
+                                    onClick={() => setEditingBillingValue(null)}
+                                    className="bg-red-500 text-white px-2 py-0.5 rounded text-[10px] font-black hover:bg-red-600"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() => setEditingBillingValue({ clientId: client.id, value: amount.toString() })}
+                                  className="text-sm font-black text-slate-800 hover:text-yellow-600 transition-colors cursor-pointer w-full py-1"
+                                  title="Clique para editar valor"
+                                >
+                                  R$ {amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </button>
+                              )}
+
+                              {/* BADGE PROPORCIONAL */}
+                              {clientBillingThisMonth?.isProportional && (
+                                <span className="text-[8px] font-black bg-orange-100 text-orange-600 px-1 py-0.5 rounded uppercase">
+                                  Proporcional
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+
+            {/* LINHA DE CLIENTES ENCERRADOS */}
+            {clients
+              .filter(c => isClientInactive(c))
+              .map(client => {
+                const totalMeetings = 5 + (client.extraMeetings ?? 0);
+                const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
+                const paymentMonth = cycleMonths[4];
+
+                return (
+                  <tr key={client.id} className="bg-slate-100/50 opacity-75 hover:bg-slate-100 transition-colors">
+                    {/* CLIENTE ENCERRADO */}
+                    <td className="px-6 py-4 sticky left-0 z-20 w-80 border-r shadow-sm bg-slate-100/50">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-slate-600 text-white flex items-center justify-center font-black text-xs flex-shrink-0">
+                          {client.sequenceInMonth}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-slate-600 text-sm uppercase truncate line-through">{client.name}</p>
+                          <p className="text-[10px] text-slate-400">Encerrado: {client.closedAt ? new Date(client.closedAt + 'T12:00:00').toLocaleDateString('pt-BR') : '-'}</p>
+                        </div>
+                      </div>
+                    </td>
+
+                    {/* MESES */}
+                    {billingData.months.map(m => {
+                      const clientBillingThisMonth = billingData.billingByMonth[m]?.find(b => b.clientId === client.id);
+                      const amount = clientBillingThisMonth?.amount || 0;
+                      const isPaymentMonth = m === paymentMonth;
+                      const paymentStatus = billingPaymentStatus[client.id] || 'PENDING';
+
+                      return (
+                        <td
+                          key={m}
+                          className={`px-4 py-4 border-l text-center ${
+                            isPaymentMonth ? 'bg-yellow-100/30' : amount > 0 ? 'bg-slate-50' : 'bg-slate-50/30 opacity-30'
+                          }`}
+                        >
+                          {amount > 0 && (
+                            <div className="flex flex-col gap-2">
+                              {/* BOLINHA ENCERRADO */}
+                              {isPaymentMonth && (
+                                <button
+                                  onClick={() => updateClientBillingStatus(client.id, paymentStatus === 'PENDING' ? 'PAID' : 'PENDING')}
+                                  className={`mx-auto w-6 h-6 rounded-full transition-all ${
+                                    paymentStatus === 'PAID'
+                                      ? 'bg-green-500 border-2 border-green-600 shadow-sm'
+                                      : 'bg-red-500 border-2 border-red-600 shadow-sm hover:bg-red-600'
+                                  }`}
+                                  title={paymentStatus === 'PAID' ? 'Pago ✓' : 'Não pago - clique para marcar como pago'}
+                                />
+                              )}
+
+                              <p className="text-sm font-black text-slate-600">
+                                R$ {amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </p>
+
+                              {/* BADGE PROPORCIONAL */}
+                              {clientBillingThisMonth?.isProportional && (
+                                <span className="text-[8px] font-black bg-orange-100 text-orange-600 px-1 py-0.5 rounded uppercase">
+                                  Proporcional
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+
+            {/* LINHA DE TOTAIS */}
+            <tr className="bg-slate-100 border-t-2 border-slate-400 sticky bottom-0 z-20">
+              <td className="px-6 py-4 sticky left-0 z-30 w-80 border-r shadow-md bg-slate-100 font-black text-slate-800 uppercase text-sm">
+                TOTAL
+              </td>
+              {billingData.months.map(m => (
+                <td key={m} className="px-4 py-4 border-l text-center bg-slate-100 font-black text-slate-800">
+                  R$ {billingData.totals[m].toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+)}
         
         {/* ===== ABA: RELATÓRIOS ===== */}
        {activeTab === 'reports' && (
