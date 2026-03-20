@@ -512,13 +512,18 @@ const clientsWithAutoSequence = useMemo(() => {
   const billingData = useMemo(() => {
   const calculatedValue = billingConfig.contractValue - (billingConfig.contractValue * billingConfig.machineRate / 100);
   
-  // Cria array com todos os meses do ano
+  // Gera lista de meses começando do MÊS ATUAL
+  const today = new Date();
+  const currentMonthKey = toMonthKey(today);
   const months: string[] = [];
-  for (let m = 1; m <= 12; m++) {
-    months.push(`${new Date().getFullYear()}-${String(m).padStart(2, '0')}`);
+  
+  // Adiciona mês atual + próximos 11 meses (total 12 meses)
+  for (let i = 0; i < 12; i++) {
+    const d = addMonths(new Date(currentMonthKey + '-01'), i);
+    months.push(toMonthKey(d));
   }
   
-  // Para cada cliente, calcula os 5 meses de faturamento
+  // Calcula faturamento por mês
   const billingByMonth: Record<string, Array<{ clientId: string; clientName: string; amount: number; isProportional: boolean }>> = {};
   
   months.forEach(m => {
@@ -533,37 +538,35 @@ const clientsWithAutoSequence = useMemo(() => {
     const isInactive = isClientInactive(client);
     const closedAtDate = client.closedAt ? new Date(client.closedAt + 'T12:00:00') : null;
     
-    // Se encerrado, calcula quantos meses durou
-    let monthsCompleted = 5;
+    // Se encerrado, calcula em qual mês (1-5) foi encerrado
+    let monthsUntilClosed = 5;
     if (isInactive && closedAtDate) {
       const startDate = new Date(client.startMonthYear + '-01');
-      const diffTime = closedAtDate.getTime() - startDate.getTime();
-      monthsCompleted = Math.ceil(diffTime / (1000 * 60 * 60 * 24 * 30));
+      const diffMs = closedAtDate.getTime() - startDate.getTime();
+      const diffMonths = Math.ceil(diffMs / (1000 * 60 * 60 * 24 * 30));
+      monthsUntilClosed = Math.min(diffMonths, 5);
     }
     
-    // Lança valor em cada um dos 5 meses (ou proporcional se encerrado)
-    cycleMonths.slice(0, 5).forEach((monthKey, idx) => {
-      if (billingByMonth[monthKey]) {
-        let amount = calculatedValue;
-        let isProportional = false;
-        
-        // Se encerrado, calcula proporcional
-        if (isInactive && idx + 1 > monthsCompleted) {
-          amount = 0; // Meses após encerramento = 0
-        } else if (isInactive && idx + 1 === monthsCompleted) {
-          // Mês de encerramento: proporcional
-          amount = (calculatedValue / 5) * monthsCompleted;
-          isProportional = true;
-        }
-        
-        billingByMonth[monthKey].push({
-          clientId: client.id,
-          clientName: client.name,
-          amount,
-          isProportional
-        });
+    // Lança valor NO 5º MÊS (ou proporcional se encerrado antes)
+    const paymentMonthKey = cycleMonths[4]; // 5º mês (índice 4)
+    
+    if (billingByMonth[paymentMonthKey]) {
+      let amount = calculatedValue;
+      let isProportional = false;
+      
+      // Se encerrado ANTES do 5º mês, calcula proporcional
+      if (isInactive && monthsUntilClosed < 5) {
+        amount = (calculatedValue / 5) * monthsUntilClosed;
+        isProportional = true;
       }
-    });
+      
+      billingByMonth[paymentMonthKey].push({
+        clientId: client.id,
+        clientName: client.name,
+        amount,
+        isProportional
+      });
+    }
   });
   
   // Calcula totais por mês
@@ -572,7 +575,13 @@ const clientsWithAutoSequence = useMemo(() => {
     totals[m] = billingByMonth[m].reduce((sum, item) => sum + item.amount, 0);
   });
   
-  return { billingByMonth, totals, calculatedValue, months };
+  // Encontra o máximo de clientes em um mês
+  const maxClientsInMonth = Math.max(
+    ...months.map(m => billingByMonth[m].length),
+    1
+  );
+  
+  return { billingByMonth, totals, calculatedValue, months, maxClientsInMonth };
 }, [clients, billingConfig]);
 
   const taskReminders = useMemo(() => {
@@ -1339,7 +1348,7 @@ const clientsWithAutoSequence = useMemo(() => {
   );
 })()}
 
-       {/* ===== ABA: FATURAMENTO ===== */}
+     {/* ===== ABA: FATURAMENTO ===== */}
 {activeTab === 'billing' && currentUser.role === UserRole.ADMIN && (
   <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
     
@@ -1433,145 +1442,110 @@ const clientsWithAutoSequence = useMemo(() => {
       </div>
     </div>
 
-    {/* TABELA COMPACTA DE FATURAMENTO */}
+    {/* TABELA GRID COMPACTA */}
     <div className="bg-white border rounded-2xl shadow-xl overflow-hidden">
       <div className="p-4 border-b bg-slate-50 flex items-center justify-between">
-        <h3 className="font-bold text-slate-800 uppercase text-xs tracking-widest">Faturamento Mensal — Valores por Cliente</h3>
+        <h3 className="font-bold text-slate-800 uppercase text-xs tracking-widest">Faturamento Mensal — Grid Fixo</h3>
       </div>
 
-      <div className="max-h-[75vh] overflow-auto">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="bg-slate-50 border-b sticky top-0 z-30">
-              {billingData.months.map(m => (
-                <th key={m} className="px-4 py-3 text-center text-[10px] font-black text-slate-400 uppercase border-l w-40 min-w-[160px]">
-                  {new Date(m + '-01').toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }).toUpperCase()}
-                </th>
-              ))}
-            </tr>
-          </thead>
+      <div className="overflow-auto max-h-[75vh]">
+        <div className="inline-flex gap-4 p-6 min-w-full">
+          
+          {billingData.months.map((month, monthIdx) => {
+            const clientsThisMonth = billingData.billingByMonth[month] || [];
+            const total = billingData.totals[month] || 0;
+            const monthLabel = new Date(month + '-01').toLocaleDateString('pt-BR', { month: 'long', year: '2-digit' }).toUpperCase();
+            
+            return (
+              <div key={month} className="flex flex-col gap-2 min-w-[220px]">
+                {/* HEADER DO MÊS */}
+                <div className="bg-gradient-to-r from-yellow-400 to-yellow-500 text-white px-4 py-3 rounded-xl font-black text-center text-sm shadow-md">
+                  {monthLabel}
+                </div>
 
-          <tbody>
-            {/* LINHAS DE CLIENTES + TOTAIS */}
-            {(() => {
-              const rows: JSX.Element[] = [];
-              
-              billingData.months.forEach((month, monthIdx) => {
-                const clientsThisMonth = billingData.billingByMonth[month] || [];
-                const total = clientsThisMonth.reduce((sum, item) => sum + item.amount, 0);
+                {/* CLIENTES DO MÊS (GRID FIXO) */}
+                <div className="space-y-2">
+                  {Array.from({ length: billingData.maxClientsInMonth }).map((_, idx) => {
+                    const item = clientsThisMonth[idx];
+                    
+                    if (!item) {
+                      // Linha vazia (placeholder)
+                      return (
+                        <div
+                          key={`empty-${idx}`}
+                          className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-lg px-3 py-2 h-16 flex items-center justify-center text-slate-300"
+                        >
+                          —
+                        </div>
+                      );
+                    }
 
-                // Para cada cliente neste mês, cria uma linha
-                clientsThisMonth.forEach((item, clientIdx) => {
-                  const client = clients.find(c => c.id === item.clientId);
-                  if (!client) return;
+                    const client = clients.find(c => c.id === item.clientId);
+                    if (!client) return null;
 
-                  const totalMeetings = 5 + (client.extraMeetings ?? 0);
-                  const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
-                  const paymentMonth = cycleMonths[4];
-                  const isPaymentMonth = month === paymentMonth;
-                  const paymentStatus = billingPaymentStatus[client.id] || 'PENDING';
+                    const totalMeetings = 5 + (client.extraMeetings ?? 0);
+                    const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
+                    const paymentMonth = cycleMonths[4];
+                    const isPaymentMonth = month === paymentMonth;
+                    const paymentStatus = billingPaymentStatus[client.id] || 'PENDING';
 
-                  // Cria células para todos os meses
-                  const cells: JSX.Element[] = [];
-                  
-                  billingData.months.forEach((m, mIdx) => {
-                    const isThisMonth = m === month;
-                    const cellContent = isThisMonth ? (
-                      <div className="flex flex-col items-center gap-1">
-                        {/* BOLINHA DE PAGAMENTO (SÓ NO MÊS DELE) */}
-                        {isPaymentMonth && (
-                          <button
-                            onClick={() => updateClientBillingStatus(client.id, paymentStatus === 'PENDING' ? 'PAID' : 'PENDING')}
-                            className={`w-4 h-4 rounded-full transition-all flex-shrink-0 ${
-                              paymentStatus === 'PAID'
-                                ? 'bg-green-500 border border-green-600 shadow-sm'
-                                : 'bg-red-500 border border-red-600 shadow-sm hover:bg-red-600'
-                            }`}
-                            title={paymentStatus === 'PAID' ? 'Pago ✓' : 'Não pago - clique para marcar como pago'}
-                          />
-                        )}
-                        {/* VALOR */}
-                        <span className="text-xs font-black text-slate-800">
-                          R$ {item.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </span>
-                        {/* NOME DO CLIENTE */}
-                        <span className="text-[9px] font-bold text-slate-600 text-center">{client.name}</span>
-                        {/* BADGE PROPORCIONAL */}
-                        {item.isProportional && (
-                          <span className="text-[8px] font-black bg-orange-100 text-orange-600 px-1 py-0.5 rounded uppercase">
-                            Proporcional
-                          </span>
-                        )}
-                      </div>
-                    ) : null;
-
-                    cells.push(
-                      <td
-                        key={mIdx}
-                        className={`px-2 py-2 border-l text-center ${
-                          isThisMonth ? 'bg-blue-50' : 'bg-white'
+                    return (
+                      <div
+                        key={item.clientId}
+                        className={`rounded-lg px-3 py-2 border-2 transition-all ${
+                          isPaymentMonth
+                            ? 'bg-blue-50 border-blue-300 shadow-sm'
+                            : 'bg-white border-slate-200'
                         }`}
                       >
-                        {cellContent}
-                      </td>
-                    );
-                  });
+                        <div className="flex items-start justify-between gap-2">
+                          {/* VALOR + NOME */}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-black text-slate-700 truncate">
+                              R$ {item.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </p>
+                            <p className="text-[10px] font-bold text-slate-600 truncate mt-0.5">
+                              {client.name}
+                            </p>
+                            {item.isProportional && (
+                              <span className="text-[8px] font-black bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded inline-block mt-1 uppercase">
+                                Prop.
+                              </span>
+                            )}
+                          </div>
 
-                  rows.push(
-                    <tr key={`${month}-${item.clientId}`} className="border-b hover:bg-slate-50/30 transition-colors">
-                      {cells}
-                    </tr>
-                  );
-                });
-
-                // LINHA DE TOTAL DO MÊS
-                const totalCells: JSX.Element[] = [];
-                billingData.months.forEach((m, mIdx) => {
-                  const isThisMonth = m === month;
-                  const monthTotal = isThisMonth ? total : null;
-
-                  totalCells.push(
-                    <td
-                      key={mIdx}
-                      className={`px-2 py-2 border-l text-center font-black ${
-                        isThisMonth ? 'bg-yellow-100 text-yellow-700 border-t-2 border-yellow-400' : 'bg-white'
-                      }`}
-                    >
-                      {isThisMonth && monthTotal !== null && (
-                        <div>
-                          <p className="text-xs">TOTAL</p>
-                          <p className="text-sm font-black">
-                            R$ {monthTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </p>
+                          {/* BOLINHA (SÓ NO MÊS DE PAGAMENTO) */}
+                          {isPaymentMonth && (
+                            <button
+                              onClick={() => updateClientBillingStatus(client.id, paymentStatus === 'PENDING' ? 'PAID' : 'PENDING')}
+                              className={`w-5 h-5 rounded-full flex-shrink-0 transition-all border-2 ${
+                                paymentStatus === 'PAID'
+                                  ? 'bg-green-500 border-green-600 shadow-sm'
+                                  : 'bg-red-500 border-red-600 shadow-sm hover:bg-red-600'
+                              }`}
+                              title={paymentStatus === 'PAID' ? 'Pago ✓' : 'Não pago - clique para marcar'}
+                            />
+                          )}
                         </div>
-                      )}
-                    </td>
-                  );
-                });
+                      </div>
+                    );
+                  })}
+                </div>
 
-                rows.push(
-                  <tr key={`total-${month}`} className="bg-yellow-50 border-b-2 border-yellow-300">
-                    {totalCells}
-                  </tr>
-                );
+                {/* TOTAL DO MÊS */}
+                <div className="border-t-2 border-yellow-400 pt-2 mt-2">
+                  <div className="bg-yellow-100 rounded-lg px-3 py-2 text-center border border-yellow-300">
+                    <p className="text-[9px] font-black text-yellow-700 uppercase">Total</p>
+                    <p className="text-sm font-black text-yellow-600">
+                      R$ {total.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
 
-                // ESPACADOR (linha vazia entre meses)
-                if (monthIdx < billingData.months.length - 1) {
-                  const spacerCells = billingData.months.map((_, mIdx) => (
-                    <td key={mIdx} className="h-2 bg-white border-l"></td>
-                  ));
-                  rows.push(
-                    <tr key={`spacer-${month}`} className="bg-slate-100">
-                      {spacerCells}
-                    </tr>
-                  );
-                }
-              });
-
-              return rows;
-            })()}
-          </tbody>
-        </table>
+        </div>
       </div>
     </div>
 
