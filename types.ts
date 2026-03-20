@@ -45,3 +45,19 @@ export interface Reminder {
   date: string;
   status: MeetingStatus;
 }
+
+// ✅ NOVO — Faturamento
+export interface BillingConfig {
+  contractValue: number;  // Valor base do contrato (ex: 1599)
+  machineRate: number;    // Taxa em % (ex: 10)
+}
+
+export interface ClientBilling {
+  clientId: string;
+  clientName: string;
+  billingValue: number;   // Valor que recebe = contractValue - (contractValue * machineRate%)
+  paymentStatus: 'PENDING' | 'PAID';  // Status do pagamento
+  paymentDate: string;    // Data projetada de pagamento (YYYY-MM-DD)
+  amount: number;         // Valor a receber (inteiro ou proporcional)
+  isProportional?: boolean;  // Se foi encerrado antecipadamente
+}
