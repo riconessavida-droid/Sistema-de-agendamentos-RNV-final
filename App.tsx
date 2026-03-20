@@ -517,21 +517,18 @@ const clientsWithAutoSequence = useMemo(() => {
   }));
 }, [clients, reportYear]);
 
- const billingData = useMemo(() => {
-  const calculatedValue = billingConfig.contractValue - (billingConfig.contractValue * billingConfig.machineRate / 100);
+const billingData = useMemo(() => {
+  const currentContractValue = billingConfig.contractValue - (billingConfig.contractValue * billingConfig.machineRate / 100);
   
-  // Gera lista de meses começando do MÊS ATUAL
   const today = new Date();
   const currentMonthKey = toMonthKey(today);
   const months: string[] = [];
   
-  // Adiciona mês atual + próximos 11 meses (total 12 meses)
   for (let i = 0; i < 12; i++) {
     const d = addMonths(new Date(currentMonthKey + '-01'), i);
     months.push(toMonthKey(d));
   }
   
-  // Calcula faturamento por mês
   const billingByMonth: Record<string, Array<{ clientId: string; clientName: string; amount: number; isProportional: boolean }>> = {};
   
   months.forEach(m => {
@@ -544,23 +541,32 @@ const clientsWithAutoSequence = useMemo(() => {
     const isInactive = isClientInactive(client);
     const closedAtDate = client.closedAt ? new Date(client.closedAt + 'T12:00:00') : null;
     
+    // ✅ USA O VALOR FIXADO DO CLIENTE (ou o valor atual se não tem)
+    const clientContractValue = client.contractValue || currentContractValue;
+    
     let paymentMonthKey: string;
-    let amount = calculatedValue;
+    let amount = clientContractValue;
     let isProportional = false;
     
     if (isInactive && closedAtDate) {
-      // Cliente encerrado — paga no MÊS DE ENCERRAMENTO (proporcional)
       paymentMonthKey = toMonthKey(closedAtDate);
       
       const startDate = new Date(client.startMonthYear + '-01');
       const diffMs = closedAtDate.getTime() - startDate.getTime();
       const diffMonths = Math.ceil(diffMs / (1000 * 60 * 60 * 24 * 30));
-      const monthsUntilClosed = Math.min(diffMonths, 5);
+      const monthsUntilClosed = Math.min(Math.max(diffMonths, 1), 5);
       
-      amount = (calculatedValue / 5) * monthsUntilClosed;
-      isProportional = true;
+      // ✅ SÓ proporcional se fechou ANTES de 5 meses (1, 2, 3 ou 4 meses)
+      if (monthsUntilClosed < 5) {
+        amount = (clientContractValue / 5) * monthsUntilClosed;
+        isProportional = true;
+      } else {
+        // Fechou no 5º mês ou depois — valor completo
+        amount = clientContractValue;
+        isProportional = false;
+      }
     } else {
-      // Cliente ativo — paga no 5º MÊS
+      // Cliente ativo — paga no 5º mês
       paymentMonthKey = cycleMonths[4];
     }
     
@@ -574,21 +580,19 @@ const clientsWithAutoSequence = useMemo(() => {
     }
   });
   
-  // Calcula totais por mês
   const totals: Record<string, number> = {};
   months.forEach(m => {
     totals[m] = billingByMonth[m].reduce((sum, item) => sum + item.amount, 0);
   });
   
-  // Encontra o máximo de clientes em um mês
   const maxClientsInMonth = Math.max(
     ...months.map(m => billingByMonth[m].length),
     1
   );
   
-  return { billingByMonth, totals, calculatedValue, months, maxClientsInMonth };
+  return { billingByMonth, totals, calculatedValue: currentContractValue, months, maxClientsInMonth };
 }, [clients, billingConfig]);
-
+  
   const taskReminders = useMemo(() => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
