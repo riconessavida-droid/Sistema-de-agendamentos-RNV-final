@@ -509,7 +509,7 @@ const clientsWithAutoSequence = useMemo(() => {
   }));
 }, [clients, reportYear]);
 
-  const billingData = useMemo(() => {
+ const billingData = useMemo(() => {
   const calculatedValue = billingConfig.contractValue - (billingConfig.contractValue * billingConfig.machineRate / 100);
   
   // Gera lista de meses começando do MÊS ATUAL
@@ -533,33 +533,30 @@ const clientsWithAutoSequence = useMemo(() => {
   clients.forEach(client => {
     const totalMeetings = 5 + (client.extraMeetings ?? 0);
     const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
-    
-    // Verifica se cliente foi encerrado
     const isInactive = isClientInactive(client);
     const closedAtDate = client.closedAt ? new Date(client.closedAt + 'T12:00:00') : null;
     
-    // Se encerrado, calcula em qual mês (1-5) foi encerrado
-    let monthsUntilClosed = 5;
+    let paymentMonthKey: string;
+    let amount = calculatedValue;
+    let isProportional = false;
+    
     if (isInactive && closedAtDate) {
+      // Cliente encerrado — paga no MÊS DE ENCERRAMENTO (proporcional)
+      paymentMonthKey = toMonthKey(closedAtDate);
+      
       const startDate = new Date(client.startMonthYear + '-01');
       const diffMs = closedAtDate.getTime() - startDate.getTime();
       const diffMonths = Math.ceil(diffMs / (1000 * 60 * 60 * 24 * 30));
-      monthsUntilClosed = Math.min(diffMonths, 5);
+      const monthsUntilClosed = Math.min(diffMonths, 5);
+      
+      amount = (calculatedValue / 5) * monthsUntilClosed;
+      isProportional = true;
+    } else {
+      // Cliente ativo — paga no 5º MÊS
+      paymentMonthKey = cycleMonths[4];
     }
     
-    // Lança valor NO 5º MÊS (ou proporcional se encerrado antes)
-    const paymentMonthKey = cycleMonths[4]; // 5º mês (índice 4)
-    
     if (billingByMonth[paymentMonthKey]) {
-      let amount = calculatedValue;
-      let isProportional = false;
-      
-      // Se encerrado ANTES do 5º mês, calcula proporcional
-      if (isInactive && monthsUntilClosed < 5) {
-        amount = (calculatedValue / 5) * monthsUntilClosed;
-        isProportional = true;
-      }
-      
       billingByMonth[paymentMonthKey].push({
         clientId: client.id,
         clientName: client.name,
@@ -1442,95 +1439,112 @@ const clientsWithAutoSequence = useMemo(() => {
       </div>
     </div>
 
-    {/* TABELA GRID COMPACTA */}
-    <div className="bg-white border rounded-2xl shadow-xl overflow-hidden">
-      <div className="p-4 border-b bg-slate-50 flex items-center justify-between">
-        <h3 className="font-bold text-slate-800 uppercase text-xs tracking-widest">Faturamento Mensal — Grid Fixo</h3>
-      </div>
+  {/* TABELA GRID COMPACTA */}
+<div className="bg-white border rounded-2xl shadow-xl overflow-hidden">
+  <div className="p-4 border-b bg-slate-50 flex items-center justify-between">
+    <h3 className="font-bold text-slate-800 uppercase text-xs tracking-widest">Faturamento Mensal — Grid Fixo</h3>
+  </div>
 
-      <div className="overflow-auto max-h-[75vh]">
-        <div className="inline-flex gap-4 p-6 min-w-full">
-          
-          {billingData.months.map((month, monthIdx) => {
-            const clientsThisMonth = billingData.billingByMonth[month] || [];
-            const total = billingData.totals[month] || 0;
-            const monthLabel = new Date(month + '-01').toLocaleDateString('pt-BR', { month: 'long', year: '2-digit' }).toUpperCase();
-            
-            return (
-              <div key={month} className="flex flex-col gap-2 min-w-[220px]">
-                {/* HEADER DO MÊS */}
-                <div className="bg-gradient-to-r from-yellow-400 to-yellow-500 text-white px-4 py-3 rounded-xl font-black text-center text-sm shadow-md">
-                  {monthLabel}
-                </div>
+  <div className="overflow-auto max-h-[75vh]">
+    <div className="inline-flex gap-4 p-6 min-w-full">
+      
+      {billingData.months.map((month, monthIdx) => {
+        const clientsThisMonth = billingData.billingByMonth[month] || [];
+        const total = billingData.totals[month] || 0;
+        const monthLabel = new Date(month + '-01').toLocaleDateString('pt-BR', { month: 'long', year: '2-digit' }).toUpperCase();
+        
+        return (
+          <div key={month} className="flex flex-col gap-2 min-w-[220px]">
+            {/* HEADER DO MÊS */}
+            <div className="bg-gradient-to-r from-yellow-400 to-yellow-500 text-white px-4 py-3 rounded-xl font-black text-center text-sm shadow-md">
+              {monthLabel}
+            </div>
 
-                {/* CLIENTES DO MÊS (GRID FIXO) */}
-                <div className="space-y-2">
-                  {Array.from({ length: billingData.maxClientsInMonth }).map((_, idx) => {
-                    const item = clientsThisMonth[idx];
-                    
-                    if (!item) {
-                      // Linha vazia (placeholder)
-                      return (
-                        <div
-                          key={`empty-${idx}`}
-                          className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-lg px-3 py-2 h-16 flex items-center justify-center text-slate-300"
-                        >
-                          —
-                        </div>
-                      );
-                    }
+            {/* TOTAL DO MÊS — NO TOPO */}
+            <div className="bg-yellow-100 rounded-lg px-3 py-2 text-center border-2 border-yellow-300 shadow-sm">
+              <p className="text-[9px] font-black text-yellow-700 uppercase">Total</p>
+              <p className="text-sm font-black text-yellow-600">
+                R$ {total.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+            </div>
 
-                    const client = clients.find(c => c.id === item.clientId);
-                    if (!client) return null;
+            {/* CLIENTES DO MÊS (GRID FIXO) */}
+            <div className="space-y-2">
+              {Array.from({ length: billingData.maxClientsInMonth }).map((_, idx) => {
+                const item = clientsThisMonth[idx];
+                
+                if (!item) {
+                  // Linha vazia (placeholder)
+                  return (
+                    <div
+                      key={`empty-${idx}`}
+                      className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-lg px-3 py-2 h-16 flex items-center justify-center text-slate-300"
+                    >
+                      —
+                    </div>
+                  );
+                }
 
-                    const totalMeetings = 5 + (client.extraMeetings ?? 0);
-                    const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
-                    const paymentMonth = cycleMonths[4];
-                    const isPaymentMonth = month === paymentMonth;
-                    const paymentStatus = billingPaymentStatus[client.id] || 'PENDING';
+                const client = clients.find(c => c.id === item.clientId);
+                if (!client) return null;
 
-                    return (
-                      <div
-                        key={item.clientId}
-                        className={`rounded-lg px-3 py-2 border-2 transition-all ${
-                          isPaymentMonth
-                            ? 'bg-blue-50 border-blue-300 shadow-sm'
-                            : 'bg-white border-slate-200'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          {/* VALOR + NOME */}
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-black text-slate-700 truncate">
-                              R$ {item.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </p>
-                            <p className="text-[10px] font-bold text-slate-600 truncate mt-0.5">
-                              {client.name}
-                            </p>
-                            {item.isProportional && (
-                              <span className="text-[8px] font-black bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded inline-block mt-1 uppercase">
-                                Prop.
-                              </span>
-                            )}
-                          </div>
+                const isInactive = isClientInactive(client);
+                const closedAtDate = client.closedAt ? new Date(client.closedAt + 'T12:00:00') : null;
+                const closedMonth = closedAtDate ? toMonthKey(closedAtDate) : null;
+                
+                // Se cliente foi encerrado, ele paga no MÊS DE ENCERRAMENTO
+                const isPaymentMonth = isInactive && closedMonth === month;
+                const paymentStatus = billingPaymentStatus[client.id] || 'PENDING';
 
-                          {/* BOLINHA (SÓ NO MÊS DE PAGAMENTO) */}
-                          {isPaymentMonth && (
-                            <button
-                              onClick={() => updateClientBillingStatus(client.id, paymentStatus === 'PENDING' ? 'PAID' : 'PENDING')}
-                              className={`w-5 h-5 rounded-full flex-shrink-0 transition-all border-2 ${
-                                paymentStatus === 'PAID'
-                                  ? 'bg-green-500 border-green-600 shadow-sm'
-                                  : 'bg-red-500 border-red-600 shadow-sm hover:bg-red-600'
-                              }`}
-                              title={paymentStatus === 'PAID' ? 'Pago ✓' : 'Não pago - clique para marcar'}
-                            />
-                          )}
-                        </div>
+                return (
+                  <div
+                    key={item.clientId}
+                    className={`rounded-lg px-3 py-2 border-2 transition-all ${
+                      isPaymentMonth
+                        ? 'bg-blue-50 border-blue-300 shadow-sm'
+                        : 'bg-white border-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      {/* VALOR + NOME */}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-black text-slate-700 truncate">
+                          R$ {item.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </p>
+                        <p className="text-[10px] font-bold text-slate-600 truncate mt-0.5">
+                          {client.name}
+                        </p>
+                        {item.isProportional && (
+                          <span className="text-[8px] font-black bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded inline-block mt-1 uppercase">
+                            Prop.
+                          </span>
+                        )}
                       </div>
-                    );
-                  })}
-                </div>
+
+                      {/* BOLINHA (SÓ NO MÊS DE ENCERRAMENTO OU 5º MÊS) */}
+                      {isPaymentMonth && (
+                        <button
+                          onClick={() => updateClientBillingStatus(client.id, paymentStatus === 'PENDING' ? 'PAID' : 'PENDING')}
+                          className={`w-5 h-5 rounded-full flex-shrink-0 transition-all border-2 ${
+                            paymentStatus === 'PAID'
+                              ? 'bg-green-500 border-green-600 shadow-sm'
+                              : 'bg-red-500 border-red-600 shadow-sm hover:bg-red-600'
+                          }`}
+                          title={paymentStatus === 'PAID' ? 'Pago ✓' : 'Não pago - clique para marcar'}
+                        />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+
+    </div>
+  </div>
+</div>
 
                 {/* TOTAL DO MÊS */}
                 <div className="border-t-2 border-yellow-400 pt-2 mt-2">
