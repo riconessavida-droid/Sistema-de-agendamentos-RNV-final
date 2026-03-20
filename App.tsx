@@ -1339,14 +1339,14 @@ const clientsWithAutoSequence = useMemo(() => {
   );
 })()}
 
-        {/* ===== ABA: FATURAMENTO ===== */}
+       {/* ===== ABA: FATURAMENTO ===== */}
 {activeTab === 'billing' && currentUser.role === UserRole.ADMIN && (
   <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
     
     {/* CABEÇALHO + CONFIG */}
     <div className="bg-white p-6 rounded-2xl border shadow-sm space-y-4">
       <h2 className="text-xl font-black flex items-center gap-3 text-slate-800">
-        <FileSignature className="text-yellow-500 w-7 h-7" /> Faturamento
+        <Trophy className="text-yellow-500 w-7 h-7" /> Faturamento
       </h2>
       
       {/* CARDS DE CONFIG */}
@@ -1433,215 +1433,143 @@ const clientsWithAutoSequence = useMemo(() => {
       </div>
     </div>
 
-    {/* TABELA DE FATURAMENTO */}
+    {/* TABELA COMPACTA DE FATURAMENTO */}
     <div className="bg-white border rounded-2xl shadow-xl overflow-hidden">
       <div className="p-4 border-b bg-slate-50 flex items-center justify-between">
-        <h3 className="font-bold text-slate-800 uppercase text-xs tracking-widest">Faturamento Mensal</h3>
+        <h3 className="font-bold text-slate-800 uppercase text-xs tracking-widest">Faturamento Mensal — Valores por Cliente</h3>
       </div>
 
-      <div className="max-h-[70vh] overflow-auto">
+      <div className="max-h-[75vh] overflow-auto">
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-slate-50 border-b sticky top-0 z-30">
-              <th className="px-6 py-4 text-left text-xs font-black text-slate-400 uppercase sticky left-0 bg-slate-50 z-40 w-80 shadow-md">Cliente</th>
               {billingData.months.map(m => (
-                <th key={m} className="px-4 py-4 text-center text-[10px] font-black text-slate-400 uppercase border-l w-48 min-w-[200px]">
-                  {new Date(m + '-01').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
+                <th key={m} className="px-4 py-3 text-center text-[10px] font-black text-slate-400 uppercase border-l w-40 min-w-[160px]">
+                  {new Date(m + '-01').toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }).toUpperCase()}
                 </th>
               ))}
             </tr>
           </thead>
 
-          <tbody className="divide-y divide-slate-200">
-            {/* LINHAS DE CLIENTES */}
-            {clients
-              .filter(c => !isClientInactive(c))
-              .sort((a, b) => a.startMonthYear.localeCompare(b.startMonthYear) || a.startDate - b.startDate)
-              .map(client => {
-                const totalMeetings = 5 + (client.extraMeetings ?? 0);
-                const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
-                const paymentMonth = cycleMonths[4];
+          <tbody>
+            {/* LINHAS DE CLIENTES + TOTAIS */}
+            {(() => {
+              const rows: JSX.Element[] = [];
+              
+              billingData.months.forEach((month, monthIdx) => {
+                const clientsThisMonth = billingData.billingByMonth[month] || [];
+                const total = clientsThisMonth.reduce((sum, item) => sum + item.amount, 0);
 
-                return (
-                  <tr key={client.id} className="hover:bg-slate-50/50 transition-colors">
-                    {/* CLIENTE */}
-                    <td className="px-6 py-4 sticky left-0 z-20 w-80 border-r shadow-sm bg-white">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-slate-800 text-white flex items-center justify-center font-black text-xs flex-shrink-0">
-                          {client.sequenceInMonth}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-bold text-slate-800 text-sm uppercase truncate">{client.name}</p>
-                          <p className="text-[10px] text-slate-400">Desde: {getMonthLabel(client.startMonthYear)}</p>
-                        </div>
+                // Para cada cliente neste mês, cria uma linha
+                clientsThisMonth.forEach((item, clientIdx) => {
+                  const client = clients.find(c => c.id === item.clientId);
+                  if (!client) return;
+
+                  const totalMeetings = 5 + (client.extraMeetings ?? 0);
+                  const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
+                  const paymentMonth = cycleMonths[4];
+                  const isPaymentMonth = month === paymentMonth;
+                  const paymentStatus = billingPaymentStatus[client.id] || 'PENDING';
+
+                  // Cria células para todos os meses
+                  const cells: JSX.Element[] = [];
+                  
+                  billingData.months.forEach((m, mIdx) => {
+                    const isThisMonth = m === month;
+                    const cellContent = isThisMonth ? (
+                      <div className="flex flex-col items-center gap-1">
+                        {/* BOLINHA DE PAGAMENTO (SÓ NO MÊS DELE) */}
+                        {isPaymentMonth && (
+                          <button
+                            onClick={() => updateClientBillingStatus(client.id, paymentStatus === 'PENDING' ? 'PAID' : 'PENDING')}
+                            className={`w-4 h-4 rounded-full transition-all flex-shrink-0 ${
+                              paymentStatus === 'PAID'
+                                ? 'bg-green-500 border border-green-600 shadow-sm'
+                                : 'bg-red-500 border border-red-600 shadow-sm hover:bg-red-600'
+                            }`}
+                            title={paymentStatus === 'PAID' ? 'Pago ✓' : 'Não pago - clique para marcar como pago'}
+                          />
+                        )}
+                        {/* VALOR */}
+                        <span className="text-xs font-black text-slate-800">
+                          R$ {item.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                        {/* NOME DO CLIENTE */}
+                        <span className="text-[9px] font-bold text-slate-600 text-center">{client.name}</span>
+                        {/* BADGE PROPORCIONAL */}
+                        {item.isProportional && (
+                          <span className="text-[8px] font-black bg-orange-100 text-orange-600 px-1 py-0.5 rounded uppercase">
+                            Proporcional
+                          </span>
+                        )}
                       </div>
+                    ) : null;
+
+                    cells.push(
+                      <td
+                        key={mIdx}
+                        className={`px-2 py-2 border-l text-center ${
+                          isThisMonth ? 'bg-blue-50' : 'bg-white'
+                        }`}
+                      >
+                        {cellContent}
+                      </td>
+                    );
+                  });
+
+                  rows.push(
+                    <tr key={`${month}-${item.clientId}`} className="border-b hover:bg-slate-50/30 transition-colors">
+                      {cells}
+                    </tr>
+                  );
+                });
+
+                // LINHA DE TOTAL DO MÊS
+                const totalCells: JSX.Element[] = [];
+                billingData.months.forEach((m, mIdx) => {
+                  const isThisMonth = m === month;
+                  const monthTotal = isThisMonth ? total : null;
+
+                  totalCells.push(
+                    <td
+                      key={mIdx}
+                      className={`px-2 py-2 border-l text-center font-black ${
+                        isThisMonth ? 'bg-yellow-100 text-yellow-700 border-t-2 border-yellow-400' : 'bg-white'
+                      }`}
+                    >
+                      {isThisMonth && monthTotal !== null && (
+                        <div>
+                          <p className="text-xs">TOTAL</p>
+                          <p className="text-sm font-black">
+                            R$ {monthTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </p>
+                        </div>
+                      )}
                     </td>
+                  );
+                });
 
-                    {/* MESES */}
-                    {billingData.months.map(m => {
-                      const clientBillingThisMonth = billingData.billingByMonth[m]?.find(b => b.clientId === client.id);
-                      const amount = clientBillingThisMonth?.amount || 0;
-                      const isPaymentMonth = m === paymentMonth;
-                      const paymentStatus = billingPaymentStatus[client.id] || 'PENDING';
-                      const isEditing = editingBillingValue?.clientId === client.id && editingBillingValue.value;
-
-                      return (
-                        <td
-                          key={m}
-                          className={`px-4 py-4 border-l text-center ${
-                            isPaymentMonth ? 'bg-yellow-50' : amount > 0 ? 'bg-white' : 'bg-slate-50/30 opacity-30'
-                          }`}
-                        >
-                          {amount > 0 && (
-                            <div className="flex flex-col gap-2">
-                              {/* BOLINHA DE PAGAMENTO (só no mês de pagamento) */}
-                              {isPaymentMonth && (
-                                <button
-                                  onClick={() => updateClientBillingStatus(client.id, paymentStatus === 'PENDING' ? 'PAID' : 'PENDING')}
-                                  className={`mx-auto w-6 h-6 rounded-full transition-all ${
-                                    paymentStatus === 'PAID'
-                                      ? 'bg-green-500 border-2 border-green-600 shadow-sm'
-                                      : 'bg-red-500 border-2 border-red-600 shadow-sm hover:bg-red-600'
-                                  }`}
-                                  title={paymentStatus === 'PAID' ? 'Pago ✓' : 'Não pago - clique para marcar como pago'}
-                                />
-                              )}
-
-                              {/* VALOR EDITÁVEL */}
-                              {isEditing ? (
-                                <div className="flex gap-1">
-                                  <input
-                                    type="number"
-                                    value={editingBillingValue.value}
-                                    onChange={e => setEditingBillingValue({ ...editingBillingValue, value: e.target.value })}
-                                    className="flex-1 bg-white border border-yellow-500 rounded px-1 py-0.5 font-black text-xs text-center outline-none"
-                                    autoFocus
-                                  />
-                                  <button
-                                    onClick={() => {
-                                      // Salvar novo valor
-                                      const newAmount = parseFloat(editingBillingValue.value) || amount;
-                                      setEditingBillingValue(null);
-                                      // TODO: Salvar no Supabase se necessário
-                                    }}
-                                    className="bg-green-500 text-white px-2 py-0.5 rounded text-[10px] font-black hover:bg-green-600"
-                                  >
-                                    ✓
-                                  </button>
-                                  <button
-                                    onClick={() => setEditingBillingValue(null)}
-                                    className="bg-red-500 text-white px-2 py-0.5 rounded text-[10px] font-black hover:bg-red-600"
-                                  >
-                                    ✕
-                                  </button>
-                                </div>
-                              ) : (
-                                <button
-                                  onClick={() => setEditingBillingValue({ clientId: client.id, value: amount.toString() })}
-                                  className="text-sm font-black text-slate-800 hover:text-yellow-600 transition-colors cursor-pointer w-full py-1"
-                                  title="Clique para editar valor"
-                                >
-                                  R$ {amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </button>
-                              )}
-
-                              {/* BADGE PROPORCIONAL */}
-                              {clientBillingThisMonth?.isProportional && (
-                                <span className="text-[8px] font-black bg-orange-100 text-orange-600 px-1 py-0.5 rounded uppercase">
-                                  Proporcional
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </td>
-                      );
-                    })}
+                rows.push(
+                  <tr key={`total-${month}`} className="bg-yellow-50 border-b-2 border-yellow-300">
+                    {totalCells}
                   </tr>
                 );
-              })}
 
-            {/* LINHA DE CLIENTES ENCERRADOS */}
-            {clients
-              .filter(c => isClientInactive(c))
-              .map(client => {
-                const totalMeetings = 5 + (client.extraMeetings ?? 0);
-                const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
-                const paymentMonth = cycleMonths[4];
+                // ESPACADOR (linha vazia entre meses)
+                if (monthIdx < billingData.months.length - 1) {
+                  const spacerCells = billingData.months.map((_, mIdx) => (
+                    <td key={mIdx} className="h-2 bg-white border-l"></td>
+                  ));
+                  rows.push(
+                    <tr key={`spacer-${month}`} className="bg-slate-100">
+                      {spacerCells}
+                    </tr>
+                  );
+                }
+              });
 
-                return (
-                  <tr key={client.id} className="bg-slate-100/50 opacity-75 hover:bg-slate-100 transition-colors">
-                    {/* CLIENTE ENCERRADO */}
-                    <td className="px-6 py-4 sticky left-0 z-20 w-80 border-r shadow-sm bg-slate-100/50">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-slate-600 text-white flex items-center justify-center font-black text-xs flex-shrink-0">
-                          {client.sequenceInMonth}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-bold text-slate-600 text-sm uppercase truncate line-through">{client.name}</p>
-                          <p className="text-[10px] text-slate-400">Encerrado: {client.closedAt ? new Date(client.closedAt + 'T12:00:00').toLocaleDateString('pt-BR') : '-'}</p>
-                        </div>
-                      </div>
-                    </td>
-
-                    {/* MESES */}
-                    {billingData.months.map(m => {
-                      const clientBillingThisMonth = billingData.billingByMonth[m]?.find(b => b.clientId === client.id);
-                      const amount = clientBillingThisMonth?.amount || 0;
-                      const isPaymentMonth = m === paymentMonth;
-                      const paymentStatus = billingPaymentStatus[client.id] || 'PENDING';
-
-                      return (
-                        <td
-                          key={m}
-                          className={`px-4 py-4 border-l text-center ${
-                            isPaymentMonth ? 'bg-yellow-100/30' : amount > 0 ? 'bg-slate-50' : 'bg-slate-50/30 opacity-30'
-                          }`}
-                        >
-                          {amount > 0 && (
-                            <div className="flex flex-col gap-2">
-                              {/* BOLINHA ENCERRADO */}
-                              {isPaymentMonth && (
-                                <button
-                                  onClick={() => updateClientBillingStatus(client.id, paymentStatus === 'PENDING' ? 'PAID' : 'PENDING')}
-                                  className={`mx-auto w-6 h-6 rounded-full transition-all ${
-                                    paymentStatus === 'PAID'
-                                      ? 'bg-green-500 border-2 border-green-600 shadow-sm'
-                                      : 'bg-red-500 border-2 border-red-600 shadow-sm hover:bg-red-600'
-                                  }`}
-                                  title={paymentStatus === 'PAID' ? 'Pago ✓' : 'Não pago - clique para marcar como pago'}
-                                />
-                              )}
-
-                              <p className="text-sm font-black text-slate-600">
-                                R$ {amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                              </p>
-
-                              {/* BADGE PROPORCIONAL */}
-                              {clientBillingThisMonth?.isProportional && (
-                                <span className="text-[8px] font-black bg-orange-100 text-orange-600 px-1 py-0.5 rounded uppercase">
-                                  Proporcional
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-
-            {/* LINHA DE TOTAIS */}
-            <tr className="bg-slate-100 border-t-2 border-slate-400 sticky bottom-0 z-20">
-              <td className="px-6 py-4 sticky left-0 z-30 w-80 border-r shadow-md bg-slate-100 font-black text-slate-800 uppercase text-sm">
-                TOTAL
-              </td>
-              {billingData.months.map(m => (
-                <td key={m} className="px-4 py-4 border-l text-center bg-slate-100 font-black text-slate-800">
-                  R$ {billingData.totals[m].toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </td>
-              ))}
-            </tr>
+              return rows;
+            })()}
           </tbody>
         </table>
       </div>
