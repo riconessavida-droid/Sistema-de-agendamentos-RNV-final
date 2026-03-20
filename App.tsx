@@ -218,25 +218,33 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
     Object.values(client.statusByMonth).some(s => s.status === MeetingStatus.CLOSED_CONTRACT);
 
   const isOrangeClient = (client: Client) => {
-    if (isClientInactive(client)) return false;
-    const totalMeetings = 5 + (client.extraMeetings ?? 0);
-    const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
-    return toMonthKey(new Date()) >= cycleMonths[totalMeetings - 2];
-  };
+  if (isClientInactive(client)) return false;
+  const totalMeetings = 5 + (client.extraMeetings ?? 0);
+  const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
+  return toMonthKey(new Date()) >= cycleMonths[totalMeetings - 2];
+};
 
-  const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor' | 'sequenceInMonth'>) => {
+const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor' | 'sequenceInMonth'>) => {
   const colorIndex = clients.length % GROUP_COLORS.length;
   const groupColor = GROUP_COLORS[colorIndex];
+  
+  // ✅ NOVO — calcula o valor do contrato (já com taxa deduzida) e fixa para este cliente
+  const currentValue = billingConfig.contractValue - (billingConfig.contractValue * billingConfig.machineRate / 100);
+
   const newClient: Client = {
     ...data,
     id: crypto.randomUUID(),
     statusByMonth: {},
     groupColor,
     sequenceInMonth: 0, // será calculado automaticamente
-    extraMeetings: data.extraMeetings ?? 0
+    extraMeetings: data.extraMeetings ?? 0,
+    contractValue: currentValue  // ✅ NOVO — fixa o valor do contrato na data de criação
   };
+
   setClients(prev => [...prev, newClient]);
+
   const { error } = await supabase.from('clients').insert(clientToDb(newClient));
+
   if (error) {
     console.error('Erro ao inserir client:', error);
     setClients(prev => prev.filter(c => c.id !== newClient.id));
@@ -1525,17 +1533,17 @@ const clientsWithAutoSequence = useMemo(() => {
                             )}
                           </div>
 
-                          {isPaymentMonth && (
-                            <button
-                              onClick={() => updateClientBillingStatus(client.id, paymentStatus === 'PENDING' ? 'PAID' : 'PENDING')}
-                              className={`w-5 h-5 rounded-full flex-shrink-0 transition-all border-2 ${
-                                paymentStatus === 'PAID'
-                                  ? 'bg-green-500 border-green-600 shadow-sm'
-                                  : 'bg-red-500 border-red-600 shadow-sm hover:bg-red-600'
-                              }`}
-                              title={paymentStatus === 'PAID' ? 'Pago ✓' : 'Não pago - clique para marcar'}
-                            />
-                          )}
+                         {isPaymentMonth && (
+  <button
+    onClick={() => updateClientBillingStatus(client.id, paymentStatus === 'PENDING' ? 'PAID' : 'PENDING')}
+    className={`w-5 h-5 rounded-full flex-shrink-0 transition-all border-2 ${
+      paymentStatus === 'PAID'
+        ? 'bg-green-500 border-green-600 shadow-sm'
+        : 'bg-red-500 border-red-600 shadow-sm hover:bg-red-600'
+    }`}
+    title={paymentStatus === 'PAID' ? 'Pago ✓' : 'Não pago - clique para marcar'}
+  />
+)}
                         </div>
                       </div>
                     );
