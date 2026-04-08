@@ -655,8 +655,10 @@ const billingData = useMemo(() => {
       const diffMs = nextMeeting.getTime() - today.getTime();
       const daysUntil = Math.round(diffMs / (1000 * 60 * 60 * 24));
 
-      // Só aparece se faltam exatamente 7 ou 3 dias
-      if (daysUntil === 7 || daysUntil === 3) {
+      // Só aparece se faltam exatamente 7 ou 3 dias e não foi avisado
+      const nextMeetingMonthKey = toMonthKey(nextMeeting);
+      const alreadyNotified = client.statusByMonth[nextMeetingMonthKey]?.notified === true;
+      if ((daysUntil === 7 || daysUntil === 3) && !alreadyNotified) {
         reminders.push({
           client,
           nextMeetingDate: nextMeeting,
@@ -1124,8 +1126,10 @@ const billingData = useMemo(() => {
         const diffMs = nextMeeting.getTime() - today.getTime();
         const daysUntil = Math.round(diffMs / (1000 * 60 * 60 * 24));
 
-        // Só aparece se a reunião cai em 3 ou 7 dias a partir de HOJE
-        if (daysUntil === 3 || daysUntil === 7) {
+        // Só aparece se a reunião cai em 3 ou 7 dias a partir de HOJE e não foi avisado
+        const nextMeetingMonthKey = toMonthKey(nextMeeting);
+        const alreadyNotified = client.statusByMonth[nextMeetingMonthKey]?.notified === true;
+        if ((daysUntil === 3 || daysUntil === 7) && !alreadyNotified) {
           result.push({
             client,
             nextMeetingDate: nextMeeting,
@@ -1179,6 +1183,11 @@ const billingData = useMemo(() => {
         const diffFromDay = Math.round(
           (nextMeeting.getTime() - day.getTime()) / (1000 * 60 * 60 * 24)
         );
+
+        // Descobre o mês da próxima reunião para checar se já foi avisado
+        const nextMeetingMonthKey = toMonthKey(nextMeeting);
+        const alreadyNotified = client.statusByMonth[nextMeetingMonthKey]?.notified === true;
+        if (alreadyNotified) return acc;
 
         if (diffFromDay === 3) {
           acc.tres.push({ client, nextMeetingDate: nextMeeting, lastMeetingDate: lastDoneDate.toLocaleDateString('pt-BR'), nextMeetingLabel });
