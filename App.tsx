@@ -483,7 +483,8 @@ const clientsWithAutoSequence = useMemo(() => {
 
     const pendingAll = activeThisMonth.filter(item =>
       item.status !== MeetingStatus.DONE &&
-      item.status !== MeetingStatus.CLOSED_CONTRACT
+      item.status !== MeetingStatus.CLOSED_CONTRACT &&
+      item.status !== MeetingStatus.CANCELLED_EARLY
     );
     const filteredPending = pendingAll.filter(item => {
       if (checklistSubFilter === 'all') return true;
@@ -496,7 +497,9 @@ const clientsWithAutoSequence = useMemo(() => {
     return {
       pending: filteredPending,
       completed: activeThisMonth.filter(item =>
-        item.status === MeetingStatus.DONE || item.status === MeetingStatus.CLOSED_CONTRACT
+        item.status === MeetingStatus.DONE ||
+        item.status === MeetingStatus.CLOSED_CONTRACT ||
+        item.status === MeetingStatus.CANCELLED_EARLY
       ),
       counts: {
         all: pendingAll.length,
@@ -758,7 +761,7 @@ const billingData = useMemo(() => {
                 <div className="bg-blue-50 p-3 rounded-xl text-blue-600"><UserPlus /></div>
                 <div><p className="text-[10px] font-black text-slate-400 uppercase">{stats.labelEntradas}</p><p className="text-2xl font-black text-slate-800">{stats.entradas}</p></div>
               </div>
-              <div className="bg-white p-5 rounded-2xl border flex items-center gap-4 shadow-sm">
+              <div className="bg-white p-5 rounded-2xl border flex items-center gap-4 shadow-sm cursor-pointer hover:border-slate-400 transition-all" onClick={() => setStatusFilter('finalized')} title="Clique para ver clientes finalizados">
                 <div className="bg-slate-50 p-3 rounded-xl text-slate-600"><CheckSquare /></div>
                 <div><p className="text-[10px] font-black text-slate-400 uppercase">Finalizados</p><p className="text-2xl font-black text-slate-800">{stats.totalFinalizados}</p></div>
               </div>
@@ -821,7 +824,7 @@ const billingData = useMemo(() => {
                                 <p className={`font-bold truncate text-sm uppercase ${inactive ? 'line-through opacity-50' : ''}`}>{client.name}</p>
                                 <a
                                   href={`https://wa.me/55${client.phoneDigits.replace(/\D/g, '')}`}
-                                  target="_blank"
+                                  target="whatsapp_web"
                                   rel="noopener noreferrer"
                                   className={`text-[10px] font-black opacity-70 hover:opacity-100 underline underline-offset-2 ${orange ? 'text-white' : 'text-green-700'}`}
                                 >
