@@ -18,7 +18,8 @@ export const STATUS_OPTIONS = [
   { value: MeetingStatus.DONE, label: 'Realizada', icon: <CheckCircle2 className="w-4 h-4 text-green-500" /> },
   { value: MeetingStatus.NOT_DONE, label: 'Não Realizada', icon: <XCircle className="w-4 h-4 text-red-500" /> },
   { value: MeetingStatus.RESCHEDULED, label: 'Remarcada', icon: <CalendarDays className="w-4 h-4 text-blue-500" /> },
-  { value: MeetingStatus.CLOSED_CONTRACT, label: 'Contrato Encerrado', icon: <UserMinus className="w-4 h-4 text-slate-600" /> },
+  { value: MeetingStatus.CLOSED_CONTRACT, label: 'Encerrado (Natural)', icon: <UserMinus className="w-4 h-4 text-slate-600" /> },
+  { value: MeetingStatus.CANCELLED_EARLY, label: 'Cancelado (Antecipado)', icon: <XCircle className="w-4 h-4 text-red-600" /> },
 ];
 
 export const GROUP_COLORS = [

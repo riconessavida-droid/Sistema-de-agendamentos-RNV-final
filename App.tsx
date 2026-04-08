@@ -87,7 +87,10 @@ const App: React.FC = () => {
   const [billingConfig, setBillingConfig] = useState<BillingConfig>({ contractValue: 1599, machineRate: 10 });
 const [loadingBillingConfig, setLoadingBillingConfig] = useState(false);
 const [editingBillingValue, setEditingBillingValue] = useState<{ clientId: string; value: string } | null>(null);
-const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 'PENDING' | 'PAID'>>({});
+const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 'PENDING' | 'PAID'>>(() => {
+    try { return JSON.parse(localStorage.getItem('rnv_billing_payments') || '{}'); }
+    catch { return {}; }
+  });
 
   const [visibleMonths, setVisibleMonths] = useState<string[]>(() => {
     const months: string[] = [];
@@ -215,7 +218,9 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
   };
 
   const isClientInactive = (client: Client) =>
-    Object.values(client.statusByMonth).some(s => s.status === MeetingStatus.CLOSED_CONTRACT);
+    Object.values(client.statusByMonth).some(
+      s => s.status === MeetingStatus.CLOSED_CONTRACT || s.status === MeetingStatus.CANCELLED_EARLY
+    );
 
   const isOrangeClient = (client: Client) => {
   if (isClientInactive(client)) return false;
@@ -319,11 +324,17 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
     }
   };
 
-  const updateClientBillingStatus = async (clientId: string, status: 'PENDING' | 'PAID') => {
-    setBillingPaymentStatus(prev => ({ ...prev, [clientId]: status }));
-    
-    // Aqui você pode adicionar lógica para salvar no Supabase se necessário
+  const updateClientBillingStatus = (clientId: string, status: 'PENDING' | 'PAID', month?: string) => {
+    const key = month ? `${clientId}-${month}` : clientId;
+    setBillingPaymentStatus(prev => {
+      const next = { ...prev, [key]: status };
+      localStorage.setItem('rnv_billing_payments', JSON.stringify(next));
+      return next;
+    });
   };
+
+  const getBillingStatus = (clientId: string, month: string): 'PENDING' | 'PAID' =>
+    billingPaymentStatus[`${clientId}-${month}`] || billingPaymentStatus[clientId] || 'PENDING';
 
   const deleteClient = async (id: string) => {
     if (window.confirm('Tem certeza que deseja excluir este cliente permanentemente?')) {
@@ -768,9 +779,6 @@ const billingData = useMemo(() => {
                 <button onClick={() => setStatusFilter('all')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'all' ? 'bg-slate-200 text-slate-700 border-slate-300' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Todos</button>
               </div>
             </div>
-
-            {/* LEMBRETES */}
-            <RemindersPanel clients={clients.filter(c => !isClientInactive(c))} />
 
             {/* TABELA */}
             <div className="bg-white border rounded-2xl shadow-xl overflow-hidden">
@@ -1424,7 +1432,6 @@ const billingData = useMemo(() => {
         <p className="text-[10px] font-black text-red-500 uppercase tracking-widest mb-2">Pendente de Cobrar</p>
         <p className="text-3xl font-black text-red-600">
           R$ {clients
-            .filter(c => billingPaymentStatus[c.id] === 'PENDING' || !billingPaymentStatus[c.id])
             .reduce((sum, c) => {
               const totalMeetings = 5 + (c.extraMeetings ?? 0);
               const cycleMonths = getNextMonths(c.startMonthYear, totalMeetings);
@@ -1433,6 +1440,8 @@ const billingData = useMemo(() => {
               const closedAtDate = c.closedAt ? new Date(c.closedAt + 'T12:00:00') : null;
               const closedMonth = closedAtDate ? toMonthKey(closedAtDate) : null;
               const relevantMonth = isInactive && closedMonth ? closedMonth : paymentMonth;
+              if (!relevantMonth) return sum;
+              if (getBillingStatus(c.id, relevantMonth) !== 'PENDING') return sum;
               return sum + (billingData.billingByMonth[relevantMonth]?.find(b => b.clientId === c.id)?.amount || 0);
             }, 0)
             .toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -1443,7 +1452,6 @@ const billingData = useMemo(() => {
         <p className="text-[10px] font-black text-green-600 uppercase tracking-widest mb-2">Já Recebido</p>
         <p className="text-3xl font-black text-green-600">
           R$ {clients
-            .filter(c => billingPaymentStatus[c.id] === 'PAID')
             .reduce((sum, c) => {
               const totalMeetings = 5 + (c.extraMeetings ?? 0);
               const cycleMonths = getNextMonths(c.startMonthYear, totalMeetings);
@@ -1452,6 +1460,8 @@ const billingData = useMemo(() => {
               const closedAtDate = c.closedAt ? new Date(c.closedAt + 'T12:00:00') : null;
               const closedMonth = closedAtDate ? toMonthKey(closedAtDate) : null;
               const relevantMonth = isInactive && closedMonth ? closedMonth : paymentMonth;
+              if (!relevantMonth) return sum;
+              if (getBillingStatus(c.id, relevantMonth) !== 'PAID') return sum;
               return sum + (billingData.billingByMonth[relevantMonth]?.find(b => b.clientId === c.id)?.amount || 0);
             }, 0)
             .toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -1511,14 +1521,14 @@ const billingData = useMemo(() => {
                     const closedAtDate = client.closedAt ? new Date(client.closedAt + 'T12:00:00') : null;
                     const closedMonth = closedAtDate ? toMonthKey(closedAtDate) : null;
                     const isPaymentMonth = isInactive && closedMonth === month;
-                    const paymentStatus = billingPaymentStatus[client.id] || 'PENDING';
+                    const paymentStatus = getBillingStatus(client.id, month);
 
                     return (
                       <div
                         key={item.clientId}
                         className={`rounded-lg px-3 py-2 border-2 transition-all ${
-                          isPaymentMonth
-                            ? 'bg-blue-50 border-blue-300 shadow-sm'
+                          paymentStatus === 'PAID'
+                            ? 'bg-green-50 border-green-300 shadow-sm'
                             : 'bg-white border-slate-200'
                         }`}
                       >
@@ -1537,17 +1547,15 @@ const billingData = useMemo(() => {
                             )}
                           </div>
 
-                         {isPaymentMonth && (
-  <button
-    onClick={() => updateClientBillingStatus(client.id, paymentStatus === 'PENDING' ? 'PAID' : 'PENDING')}
-    className={`w-5 h-5 rounded-full flex-shrink-0 transition-all border-2 ${
-      paymentStatus === 'PAID'
-        ? 'bg-green-500 border-green-600 shadow-sm'
-        : 'bg-red-500 border-red-600 shadow-sm hover:bg-red-600'
-    }`}
-    title={paymentStatus === 'PAID' ? 'Pago ✓' : 'Não pago - clique para marcar'}
-  />
-)}
+                         <button
+                            onClick={() => updateClientBillingStatus(client.id, paymentStatus === 'PENDING' ? 'PAID' : 'PENDING', month)}
+                            className={`w-5 h-5 rounded-full flex-shrink-0 transition-all border-2 ${
+                              paymentStatus === 'PAID'
+                                ? 'bg-green-500 border-green-600 shadow-sm'
+                                : 'bg-white border-slate-300 hover:border-green-400'
+                            }`}
+                            title={paymentStatus === 'PAID' ? 'Pago ✓ (clique para desmarcar)' : 'Marcar como pago'}
+                          />
                         </div>
                       </div>
                     );
@@ -1711,6 +1719,39 @@ const billingData = useMemo(() => {
         })}
       </div>
 
+      {/* BREAKDOWN CANCELAMENTOS */}
+      {(() => {
+        const yearClients = clients.filter(c => c.startMonthYear.startsWith(String(reportYear)));
+        const ativos = yearClients.filter(c => !isClientInactive(c)).length;
+        const natural = yearClients.filter(c =>
+          Object.values(c.statusByMonth).some(s => s.status === MeetingStatus.CLOSED_CONTRACT)
+        ).length;
+        const antecipado = yearClients.filter(c =>
+          Object.values(c.statusByMonth).some(s => s.status === MeetingStatus.CANCELLED_EARLY)
+        ).length;
+        const total = yearClients.length;
+        const taxaCancelamento = total > 0 ? Math.round((antecipado / total) * 100) : 0;
+        return (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2">
+            <div className="p-4 bg-green-50 rounded-2xl border border-green-200 text-center">
+              <p className="text-[9px] font-black text-green-600 uppercase tracking-widest mb-1">Ativos</p>
+              <p className="text-2xl font-black text-green-700">{ativos}</p>
+            </div>
+            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-center">
+              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Encerrado Natural</p>
+              <p className="text-2xl font-black text-slate-700">{natural}</p>
+            </div>
+            <div className="p-4 bg-red-50 rounded-2xl border border-red-200 text-center">
+              <p className="text-[9px] font-black text-red-500 uppercase tracking-widest mb-1">Cancelado Antecip.</p>
+              <p className="text-2xl font-black text-red-600">{antecipado}</p>
+            </div>
+            <div className="p-4 bg-orange-50 rounded-2xl border border-orange-200 text-center">
+              <p className="text-[9px] font-black text-orange-600 uppercase tracking-widest mb-1">Taxa Cancelamento</p>
+              <p className="text-2xl font-black text-orange-700">{taxaCancelamento}%</p>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   </div>
 )}
