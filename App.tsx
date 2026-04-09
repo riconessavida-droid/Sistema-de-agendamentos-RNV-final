@@ -81,6 +81,7 @@ const App: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterMonth, setFilterMonth] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
+  const [monthDropdownOpen, setMonthDropdownOpen] = useState(false);
   const [checklistMonth, setChecklistMonth] = useState<string>(() => toMonthKey(new Date()));
   const [checklistSubFilter, setChecklistSubFilter] = useState<ChecklistSubFilter>('all');
   const [reportYear, setReportYear] = useState<number>(new Date().getFullYear());
@@ -772,19 +773,43 @@ const billingData = useMemo(() => {
             {/* FILTROS */}
             <div className="bg-white p-4 rounded-xl border shadow-sm">
               <div className="flex flex-wrap gap-2 items-center">
-                <span className="text-[10px] font-black text-slate-400 uppercase mr-2">Filtrar por Mês:</span>
-                <button onClick={() => setFilterMonth('all')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${filterMonth === 'all' ? 'bg-slate-800 text-white border-slate-900' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Todos</button>
-                {availableMonths.map(m => (
-                  <button key={m} onClick={() => setFilterMonth(m)} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${filterMonth === m ? 'bg-yellow-500 text-white border-yellow-600' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>{getMonthLabel(m)}</button>
-                ))}
-              </div>
-              <div className="flex flex-wrap gap-2 items-center mt-3 pt-3 border-t">
                 <span className="text-[10px] font-black text-slate-400 uppercase mr-2">Filtrar Status:</span>
                 <button onClick={() => setStatusFilter('active')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'active' ? 'bg-green-600 text-white border-green-700 shadow-md' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Ativos</button>
                 <button onClick={() => setStatusFilter('needs_attention')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'needs_attention' ? 'bg-orange-500 text-white border-orange-600 shadow-md' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Atenção</button>
                 <button onClick={() => setStatusFilter('finalized')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'finalized' ? 'bg-slate-800 text-white border-slate-900 shadow-md' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Finalizados</button>
                 <button onClick={() => setStatusFilter('unsigned')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'unsigned' ? 'bg-yellow-500 text-white border-yellow-600 shadow-md' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Contrato Pendente</button>
                 <button onClick={() => setStatusFilter('all')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'all' ? 'bg-slate-200 text-slate-700 border-slate-300' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Todos</button>
+
+                {/* DROPDOWN MÊS */}
+                <div className="relative ml-auto">
+                  <button
+                    onClick={() => setMonthDropdownOpen(o => !o)}
+                    className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${filterMonth !== 'all' ? 'bg-yellow-500 text-white border-yellow-600 shadow-md' : 'bg-slate-50 text-slate-400 hover:bg-slate-100 border-slate-200'}`}
+                  >
+                    {filterMonth === 'all' ? 'Mês: Todos' : getMonthLabel(filterMonth)}
+                    <ChevronRight className={`w-3 h-3 transition-transform ${monthDropdownOpen ? 'rotate-90' : ''}`} />
+                  </button>
+                  {monthDropdownOpen && (
+                    <div className="absolute right-0 top-full mt-1 bg-white border rounded-xl shadow-xl z-50 min-w-[180px] py-1 animate-in fade-in">
+                      <button
+                        onClick={() => { setFilterMonth('all'); setMonthDropdownOpen(false); }}
+                        className={`w-full text-left px-4 py-2 text-[10px] font-black uppercase hover:bg-slate-50 transition-colors ${filterMonth === 'all' ? 'text-slate-800 bg-slate-50' : 'text-slate-400'}`}
+                      >
+                        Todos os meses
+                      </button>
+                      <div className="border-t my-1" />
+                      {availableMonths.map(m => (
+                        <button
+                          key={m}
+                          onClick={() => { setFilterMonth(m); setMonthDropdownOpen(false); }}
+                          className={`w-full text-left px-4 py-2 text-[10px] font-black uppercase hover:bg-slate-50 transition-colors ${filterMonth === m ? 'text-yellow-600 bg-yellow-50' : 'text-slate-500'}`}
+                        >
+                          {getMonthLabel(m)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
