@@ -6,7 +6,7 @@ import {
   AlertCircle, UserPlus, Trophy,
   CheckSquare, Download, UserCog, Bell, FileSignature
 } from 'lucide-react';
-import { Client, MeetingStatus, User, UserRole, BillingConfig, ClientBilling } from './types';
+import { Client, MeetingStatus, User, UserRole, BillingConfig, ClientBilling, BillingPeriod } from './types';
 import {
   STATUS_OPTIONS, GROUP_COLORS, getNextMonths, getMonthLabel, MEETING_LABEL_TEXTS
 } from './constants';
@@ -98,6 +98,9 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
     try { return JSON.parse(localStorage.getItem('rnv_billing_payments') || '{}'); }
     catch { return {}; }
   });
+  const [billingPeriods, setBillingPeriods] = useState<BillingPeriod[]>([]);
+  const [newPeriodForm, setNewPeriodForm] = useState({ fromMonth: '', toMonth: '', grossValue: '', machineRate: '' });
+  const [savingPeriod, setSavingPeriod] = useState(false);
 
   const [visibleMonths, setVisibleMonths] = useState<string[]>(() => {
     const months: string[] = [];
@@ -180,6 +183,25 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
   }, [currentUser]);
 
   useEffect(() => {
+    const loadBillingPeriods = async () => {
+      if (!currentUser) return;
+      const { data } = await supabase
+        .from('billing_periods')
+        .select('*')
+        .order('from_month', { ascending: true });
+      if (data) setBillingPeriods(data.map(row => ({
+        id: row.id,
+        fromMonth: row.from_month,
+        toMonth: row.to_month ?? null,
+        grossValue: row.gross_value,
+        machineRate: row.machine_rate,
+        netValue: row.net_value
+      })));
+    };
+    loadBillingPeriods();
+  }, [currentUser]);
+
+  useEffect(() => {
     const loadUsers = async () => {
       if (!currentUser || currentUser.role !== UserRole.ADMIN) return;
       setLoadingUsers(true);
@@ -241,10 +263,14 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
   const colorIndex = clients.length % GROUP_COLORS.length;
   const groupColor = GROUP_COLORS[colorIndex];
   
-  // Fixa os valores da época do contrato para este cliente
-  const grossValue = billingConfig.contractValue;
-  const rate = billingConfig.machineRate;
-  const netValue = grossValue - (grossValue * rate / 100);
+  // Fixa os valores da época do contrato — usa período de faturamento se existir para o mês de início
+  const matchingPeriod = billingPeriods
+    .filter(p => p.fromMonth <= data.startMonthYear)
+    .filter(p => !p.toMonth || p.toMonth >= data.startMonthYear)
+    .sort((a, b) => b.fromMonth.localeCompare(a.fromMonth))[0];
+  const grossValue = matchingPeriod ? matchingPeriod.grossValue : billingConfig.contractValue;
+  const rate = matchingPeriod ? matchingPeriod.machineRate : billingConfig.machineRate;
+  const netValue = parseFloat((grossValue - (grossValue * rate / 100)).toFixed(2));
 
   const newClient: Client = {
     ...data,
@@ -321,7 +347,7 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
 
   const updateBillingConfig = async (newConfig: BillingConfig) => {
     setBillingConfig(newConfig);
-    
+
     const { error } = await supabase
       .from('billing_config')
       .update({
@@ -329,11 +355,88 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
         machine_rate: newConfig.machineRate
       })
       .eq('id', 1);
-    
+
     if (error) {
       console.error('Erro ao atualizar billing config:', error);
       alert(`Erro ao salvar configuração: ${error.message}`);
     }
+  };
+
+  const formMonthOptions = useMemo(() => {
+    const months: string[] = [];
+    let d = new Date(2025, 0, 1);
+    const end = addMonths(new Date(), 12);
+    while (d <= end) {
+      months.push(toMonthKey(d));
+      d = addMonths(d, 1);
+    }
+    return months;
+  }, []);
+
+  const saveBillingPeriod = async () => {
+    const gross = parseFloat(newPeriodForm.grossValue);
+    const rate = parseFloat(newPeriodForm.machineRate);
+    if (!newPeriodForm.fromMonth || isNaN(gross) || isNaN(rate)) {
+      alert('Preencha o mês inicial, valor bruto e taxa.');
+      return;
+    }
+    const net = parseFloat((gross - (gross * rate / 100)).toFixed(2));
+    setSavingPeriod(true);
+
+    const { data: periodData, error } = await supabase
+      .from('billing_periods')
+      .insert({
+        from_month: newPeriodForm.fromMonth,
+        to_month: newPeriodForm.toMonth || null,
+        gross_value: gross,
+        machine_rate: rate,
+        net_value: net
+      })
+      .select()
+      .single();
+
+    if (!error && periodData) {
+      // Update all clients in that month range
+      const updatedClients = clients.map(c => {
+        if (c.startMonthYear < newPeriodForm.fromMonth) return c;
+        if (newPeriodForm.toMonth && c.startMonthYear > newPeriodForm.toMonth) return c;
+        return { ...c, contractGrossValue: gross, contractMachineRate: rate, contractValue: net };
+      });
+      setClients(updatedClients);
+
+      // Persist to Supabase
+      const toUpdate = updatedClients.filter(c => {
+        const orig = clients.find(o => o.id === c.id);
+        return orig && orig.contractValue !== c.contractValue;
+      });
+      for (const c of toUpdate) {
+        await supabase.from('clients').update({
+          contract_gross_value: gross,
+          contract_machine_rate: rate,
+          contract_value: net
+        }).eq('id', c.id);
+      }
+
+      setBillingPeriods(prev => [...prev, {
+        id: periodData.id,
+        fromMonth: periodData.from_month,
+        toMonth: periodData.to_month ?? null,
+        grossValue: periodData.gross_value,
+        machineRate: periodData.machine_rate,
+        netValue: periodData.net_value
+      }].sort((a, b) => a.fromMonth.localeCompare(b.fromMonth)));
+
+      setNewPeriodForm({ fromMonth: '', toMonth: '', grossValue: '', machineRate: '' });
+    } else if (error) {
+      alert(`Erro ao salvar período: ${error.message}`);
+    }
+    setSavingPeriod(false);
+  };
+
+  const deleteBillingPeriod = async (id: number) => {
+    if (!confirm('Excluir este período? Os valores dos clientes não serão revertidos.')) return;
+    const { error } = await supabase.from('billing_periods').delete().eq('id', id);
+    if (!error) setBillingPeriods(prev => prev.filter(p => p.id !== id));
   };
 
   const updateClientBillingStatus = (clientId: string, status: 'PENDING' | 'PAID', month?: string) => {
@@ -1419,58 +1522,122 @@ const billingData = useMemo(() => {
 {activeTab === 'billing' && currentUser.role === UserRole.ADMIN && (
   <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
     
-    {/* CABEÇALHO + CONFIG */}
-    <div className="bg-white p-6 rounded-2xl border shadow-sm space-y-4">
+    {/* CABEÇALHO + PERÍODOS */}
+    <div className="bg-white p-6 rounded-2xl border shadow-sm space-y-5">
       <div>
         <h2 className="text-xl font-black flex items-center gap-3 text-slate-800">
           <Trophy className="text-yellow-500 w-7 h-7" /> Faturamento
         </h2>
         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">
-          Valores abaixo aplicam-se apenas aos novos clientes — contratos existentes mantêm o valor fixado na data de entrada
+          Períodos de cobrança — cada período define o valor aplicado a todos os clientes que iniciaram naquele intervalo
         </p>
       </div>
 
-      {/* CARDS DE CONFIG */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {/* Valor do Contrato */}
-        <div className="bg-slate-50 p-4 rounded-xl border">
-          <label className="text-[10px] font-black text-slate-400 uppercase block mb-2">Valor do Contrato (novos clientes)</label>
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-black text-slate-600">R$</span>
+      {/* LISTA DE PERÍODOS */}
+      {billingPeriods.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Períodos Cadastrados</p>
+          {billingPeriods.map(p => (
+            <div key={p.id} className="flex items-center justify-between bg-slate-50 border rounded-xl px-4 py-3">
+              <div className="flex flex-wrap items-center gap-4">
+                <div>
+                  <p className="text-xs font-black text-slate-700">
+                    {getMonthLabel(p.fromMonth)} → {p.toMonth ? getMonthLabel(p.toMonth) : 'em diante'}
+                  </p>
+                  <p className="text-[10px] text-slate-400 font-bold mt-0.5">
+                    R$ {p.grossValue.toLocaleString('pt-BR')} bruto • {p.machineRate}% taxa
+                  </p>
+                </div>
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-1.5">
+                  <p className="text-[9px] font-black text-yellow-700 uppercase">Valor Líquido</p>
+                  <p className="text-sm font-black text-yellow-600">
+                    R$ {p.netValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => deleteBillingPeriod(p.id)}
+                className="p-2 text-slate-300 hover:text-red-400 transition-colors ml-2 flex-shrink-0"
+                title="Excluir período"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* FORMULÁRIO NOVO PERÍODO */}
+      <div className={`space-y-3 ${billingPeriods.length > 0 ? 'border-t pt-4' : ''}`}>
+        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Adicionar Período</p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div>
+            <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">De (mês)</label>
+            <select
+              value={newPeriodForm.fromMonth}
+              onChange={e => setNewPeriodForm(f => ({ ...f, fromMonth: e.target.value }))}
+              className="w-full bg-white border rounded-lg px-2 py-2 font-bold text-sm outline-none focus:ring-2 focus:ring-yellow-500"
+            >
+              <option value="">Selecionar...</option>
+              {formMonthOptions.map(m => <option key={m} value={m}>{getMonthLabel(m)}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Até (mês)</label>
+            <select
+              value={newPeriodForm.toMonth}
+              onChange={e => setNewPeriodForm(f => ({ ...f, toMonth: e.target.value }))}
+              className="w-full bg-white border rounded-lg px-2 py-2 font-bold text-sm outline-none focus:ring-2 focus:ring-yellow-500"
+            >
+              <option value="">Em diante</option>
+              {formMonthOptions.map(m => <option key={m} value={m}>{getMonthLabel(m)}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Valor Bruto (R$)</label>
             <input
               type="number"
-              value={billingConfig.contractValue}
-              onChange={e => updateBillingConfig({ ...billingConfig, contractValue: parseFloat(e.target.value) || 0 })}
-              className="flex-1 bg-white border rounded px-2 py-1 font-black text-sm outline-none focus:ring-2 focus:ring-yellow-500"
+              value={newPeriodForm.grossValue}
+              onChange={e => setNewPeriodForm(f => ({ ...f, grossValue: e.target.value }))}
+              placeholder="1999"
+              className="w-full bg-white border rounded-lg px-2 py-2 font-bold text-sm outline-none focus:ring-2 focus:ring-yellow-500"
               step="0.01"
             />
           </div>
-        </div>
-
-        {/* Taxa da Maquininha */}
-        <div className="bg-slate-50 p-4 rounded-xl border">
-          <label className="text-[10px] font-black text-slate-400 uppercase block mb-2">Taxa Maquininha</label>
-          <div className="flex items-center gap-2">
+          <div>
+            <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Taxa (%)</label>
             <input
               type="number"
-              value={billingConfig.machineRate}
-              onChange={e => updateBillingConfig({ ...billingConfig, machineRate: parseFloat(e.target.value) || 0 })}
-              className="flex-1 bg-white border rounded px-2 py-1 font-black text-sm outline-none focus:ring-2 focus:ring-yellow-500"
+              value={newPeriodForm.machineRate}
+              onChange={e => setNewPeriodForm(f => ({ ...f, machineRate: e.target.value }))}
+              placeholder="12"
+              className="w-full bg-white border rounded-lg px-2 py-2 font-bold text-sm outline-none focus:ring-2 focus:ring-yellow-500"
               step="0.01"
               min="0"
               max="100"
             />
-            <span className="text-sm font-black text-slate-600">%</span>
           </div>
         </div>
-
-        {/* Valor Final */}
-        <div className="bg-yellow-50 p-4 rounded-xl border border-yellow-200">
-          <label className="text-[10px] font-black text-yellow-700 uppercase block mb-2">Valor por Cliente</label>
-          <p className="text-lg font-black text-yellow-600">
-            R$ {billingData.calculatedValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-          </p>
+        <div className="flex flex-wrap items-center gap-4">
+          {newPeriodForm.grossValue && newPeriodForm.machineRate && (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-1.5">
+              <p className="text-[9px] font-black text-yellow-700 uppercase">Valor Líquido Calculado</p>
+              <p className="text-sm font-black text-yellow-600">
+                R$ {(parseFloat(newPeriodForm.grossValue || '0') * (1 - parseFloat(newPeriodForm.machineRate || '0') / 100)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+            </div>
+          )}
+          <button
+            onClick={saveBillingPeriod}
+            disabled={savingPeriod || !newPeriodForm.fromMonth || !newPeriodForm.grossValue || !newPeriodForm.machineRate}
+            className="bg-yellow-500 hover:bg-yellow-600 disabled:opacity-40 text-white font-black text-xs uppercase tracking-widest px-6 py-2.5 rounded-xl transition-all shadow-sm"
+          >
+            {savingPeriod ? 'Salvando...' : 'Salvar Período'}
+          </button>
         </div>
+        <p className="text-[10px] text-slate-400 font-bold">
+          Ao salvar, todos os clientes com início nesse intervalo serão atualizados automaticamente.
+        </p>
       </div>
     </div>
 

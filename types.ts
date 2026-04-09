@@ -64,3 +64,12 @@ export interface ClientBilling {
   amount: number;
   isProportional?: boolean;
 }
+
+export interface BillingPeriod {
+  id: number;
+  fromMonth: string;
+  toMonth: string | null;
+  grossValue: number;
+  machineRate: number;
+  netValue: number;
+}
