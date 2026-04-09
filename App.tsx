@@ -1753,7 +1753,7 @@ const billingData = useMemo(() => {
               <p className="text-2xl font-black text-green-700">{ativos}</p>
             </div>
             <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-center">
-              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Encerrado Natural</p>
+              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Finalizado</p>
               <p className="text-2xl font-black text-slate-700">{natural}</p>
             </div>
             <div className="p-4 bg-red-50 rounded-2xl border border-red-200 text-center">
