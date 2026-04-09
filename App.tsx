@@ -19,7 +19,7 @@ const SESSION_KEY = 'rnv_current_session';
 
 type TabType = 'overview' | 'checklist' | 'reports' | 'users' | 'tasks' | 'billing';
 type ChecklistSubFilter = 'all' | 'pending' | 'not_done' | 'rescheduled';
-type StatusFilter = 'all' | 'active' | 'finalized' | 'needs_attention';
+type StatusFilter = 'all' | 'active' | 'finalized' | 'needs_attention' | 'unsigned';
 
 type DbClientRow = {
   id: string;
@@ -226,7 +226,8 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
   if (isClientInactive(client)) return false;
   const totalMeetings = 5 + (client.extraMeetings ?? 0);
   const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
-  return toMonthKey(new Date()) >= cycleMonths[totalMeetings - 2];
+  // Laranja apenas no último mês (5ª reunião), não no penúltimo
+  return toMonthKey(new Date()) >= cycleMonths[totalMeetings - 1];
 };
 
 const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor' | 'sequenceInMonth'>) => {
@@ -445,6 +446,7 @@ const clientsWithAutoSequence = useMemo(() => {
       if (statusFilter === 'active') matchesStatus = !inactive;
       else if (statusFilter === 'finalized') matchesStatus = inactive;
       else if (statusFilter === 'needs_attention') matchesStatus = orange;
+      else if (statusFilter === 'unsigned') matchesStatus = !inactive && !c.contractSigned;
       return matchesSearch && matchesMonth && matchesStatus;
     })
     .sort((a, b) => {
@@ -781,6 +783,7 @@ const billingData = useMemo(() => {
                 <button onClick={() => setStatusFilter('active')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'active' ? 'bg-green-600 text-white border-green-700 shadow-md' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Ativos</button>
                 <button onClick={() => setStatusFilter('needs_attention')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'needs_attention' ? 'bg-orange-500 text-white border-orange-600 shadow-md' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Atenção</button>
                 <button onClick={() => setStatusFilter('finalized')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'finalized' ? 'bg-slate-800 text-white border-slate-900 shadow-md' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Finalizados</button>
+                <button onClick={() => setStatusFilter('unsigned')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'unsigned' ? 'bg-yellow-500 text-white border-yellow-600 shadow-md' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Contrato Pendente</button>
                 <button onClick={() => setStatusFilter('all')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'all' ? 'bg-slate-200 text-slate-700 border-slate-300' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Todos</button>
               </div>
             </div>
