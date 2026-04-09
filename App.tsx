@@ -1522,122 +1522,79 @@ const billingData = useMemo(() => {
 {activeTab === 'billing' && currentUser.role === UserRole.ADMIN && (
   <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
     
-    {/* CABEÇALHO + PERÍODOS */}
-    <div className="bg-white p-6 rounded-2xl border shadow-sm space-y-5">
-      <div>
-        <h2 className="text-xl font-black flex items-center gap-3 text-slate-800">
-          <Trophy className="text-yellow-500 w-7 h-7" /> Faturamento
+    {/* CABEÇALHO + PERÍODOS — compacto */}
+    <div className="bg-white px-4 py-3 rounded-2xl border shadow-sm">
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-base font-black flex items-center gap-2 text-slate-800">
+          <Trophy className="text-yellow-500 w-5 h-5" /> Faturamento
         </h2>
-        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">
-          Períodos de cobrança — cada período define o valor aplicado a todos os clientes que iniciaram naquele intervalo
-        </p>
+        <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">Períodos de cobrança</span>
       </div>
 
-      {/* LISTA DE PERÍODOS */}
+      {/* PERÍODOS CADASTRADOS — chips inline */}
       {billingPeriods.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Períodos Cadastrados</p>
+        <div className="flex flex-wrap gap-2 mb-2">
           {billingPeriods.map(p => (
-            <div key={p.id} className="flex items-center justify-between bg-slate-50 border rounded-xl px-4 py-3">
-              <div className="flex flex-wrap items-center gap-4">
-                <div>
-                  <p className="text-xs font-black text-slate-700">
-                    {getMonthLabel(p.fromMonth)} → {p.toMonth ? getMonthLabel(p.toMonth) : 'em diante'}
-                  </p>
-                  <p className="text-[10px] text-slate-400 font-bold mt-0.5">
-                    R$ {p.grossValue.toLocaleString('pt-BR')} bruto • {p.machineRate}% taxa
-                  </p>
-                </div>
-                <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-1.5">
-                  <p className="text-[9px] font-black text-yellow-700 uppercase">Valor Líquido</p>
-                  <p className="text-sm font-black text-yellow-600">
-                    R$ {p.netValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => deleteBillingPeriod(p.id)}
-                className="p-2 text-slate-300 hover:text-red-400 transition-colors ml-2 flex-shrink-0"
-                title="Excluir período"
-              >
-                <Trash2 className="w-4 h-4" />
+            <div key={p.id} className="flex items-center gap-1.5 bg-slate-50 border rounded-lg px-2.5 py-1 text-[10px] font-bold text-slate-600">
+              <span>{getMonthLabel(p.fromMonth)} → {p.toMonth ? getMonthLabel(p.toMonth) : 'em diante'}</span>
+              <span className="text-slate-300">|</span>
+              <span className="text-yellow-600 font-black">R$ {p.netValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              <span className="text-slate-300">|</span>
+              <span className="text-slate-400">{p.machineRate}%</span>
+              <button onClick={() => deleteBillingPeriod(p.id)} className="text-slate-300 hover:text-red-400 ml-0.5" title="Excluir">
+                <X className="w-3 h-3" />
               </button>
             </div>
           ))}
         </div>
       )}
 
-      {/* FORMULÁRIO NOVO PERÍODO */}
-      <div className={`space-y-3 ${billingPeriods.length > 0 ? 'border-t pt-4' : ''}`}>
-        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Adicionar Período</p>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div>
-            <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">De (mês)</label>
-            <select
-              value={newPeriodForm.fromMonth}
-              onChange={e => setNewPeriodForm(f => ({ ...f, fromMonth: e.target.value }))}
-              className="w-full bg-white border rounded-lg px-2 py-2 font-bold text-sm outline-none focus:ring-2 focus:ring-yellow-500"
-            >
-              <option value="">Selecionar...</option>
-              {formMonthOptions.map(m => <option key={m} value={m}>{getMonthLabel(m)}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Até (mês)</label>
-            <select
-              value={newPeriodForm.toMonth}
-              onChange={e => setNewPeriodForm(f => ({ ...f, toMonth: e.target.value }))}
-              className="w-full bg-white border rounded-lg px-2 py-2 font-bold text-sm outline-none focus:ring-2 focus:ring-yellow-500"
-            >
-              <option value="">Em diante</option>
-              {formMonthOptions.map(m => <option key={m} value={m}>{getMonthLabel(m)}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Valor Bruto (R$)</label>
-            <input
-              type="number"
-              value={newPeriodForm.grossValue}
-              onChange={e => setNewPeriodForm(f => ({ ...f, grossValue: e.target.value }))}
-              placeholder="1999"
-              className="w-full bg-white border rounded-lg px-2 py-2 font-bold text-sm outline-none focus:ring-2 focus:ring-yellow-500"
-              step="0.01"
-            />
-          </div>
-          <div>
-            <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Taxa (%)</label>
-            <input
-              type="number"
-              value={newPeriodForm.machineRate}
-              onChange={e => setNewPeriodForm(f => ({ ...f, machineRate: e.target.value }))}
-              placeholder="12"
-              className="w-full bg-white border rounded-lg px-2 py-2 font-bold text-sm outline-none focus:ring-2 focus:ring-yellow-500"
-              step="0.01"
-              min="0"
-              max="100"
-            />
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-4">
-          {newPeriodForm.grossValue && newPeriodForm.machineRate && (
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-1.5">
-              <p className="text-[9px] font-black text-yellow-700 uppercase">Valor Líquido Calculado</p>
-              <p className="text-sm font-black text-yellow-600">
-                R$ {(parseFloat(newPeriodForm.grossValue || '0') * (1 - parseFloat(newPeriodForm.machineRate || '0') / 100)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </p>
-            </div>
-          )}
-          <button
-            onClick={saveBillingPeriod}
-            disabled={savingPeriod || !newPeriodForm.fromMonth || !newPeriodForm.grossValue || !newPeriodForm.machineRate}
-            className="bg-yellow-500 hover:bg-yellow-600 disabled:opacity-40 text-white font-black text-xs uppercase tracking-widest px-6 py-2.5 rounded-xl transition-all shadow-sm"
-          >
-            {savingPeriod ? 'Salvando...' : 'Salvar Período'}
-          </button>
-        </div>
-        <p className="text-[10px] text-slate-400 font-bold">
-          Ao salvar, todos os clientes com início nesse intervalo serão atualizados automaticamente.
-        </p>
+      {/* FORMULÁRIO COMPACTO — tudo em uma linha */}
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={newPeriodForm.fromMonth}
+          onChange={e => setNewPeriodForm(f => ({ ...f, fromMonth: e.target.value }))}
+          className="bg-slate-50 border rounded-lg px-2 py-1.5 font-bold text-xs outline-none focus:ring-1 focus:ring-yellow-500 text-slate-600"
+        >
+          <option value="">De...</option>
+          {formMonthOptions.map(m => <option key={m} value={m}>{getMonthLabel(m)}</option>)}
+        </select>
+        <select
+          value={newPeriodForm.toMonth}
+          onChange={e => setNewPeriodForm(f => ({ ...f, toMonth: e.target.value }))}
+          className="bg-slate-50 border rounded-lg px-2 py-1.5 font-bold text-xs outline-none focus:ring-1 focus:ring-yellow-500 text-slate-600"
+        >
+          <option value="">Até...</option>
+          {formMonthOptions.map(m => <option key={m} value={m}>{getMonthLabel(m)}</option>)}
+        </select>
+        <input
+          type="number"
+          value={newPeriodForm.grossValue}
+          onChange={e => setNewPeriodForm(f => ({ ...f, grossValue: e.target.value }))}
+          placeholder="Valor bruto"
+          className="bg-slate-50 border rounded-lg px-2 py-1.5 font-bold text-xs outline-none focus:ring-1 focus:ring-yellow-500 w-28"
+          step="0.01"
+        />
+        <input
+          type="number"
+          value={newPeriodForm.machineRate}
+          onChange={e => setNewPeriodForm(f => ({ ...f, machineRate: e.target.value }))}
+          placeholder="Taxa %"
+          className="bg-slate-50 border rounded-lg px-2 py-1.5 font-bold text-xs outline-none focus:ring-1 focus:ring-yellow-500 w-20"
+          step="0.01" min="0" max="100"
+        />
+        {newPeriodForm.grossValue && newPeriodForm.machineRate && (
+          <span className="text-xs font-black text-yellow-600 bg-yellow-50 border border-yellow-200 rounded-lg px-2 py-1.5">
+            = R$ {(parseFloat(newPeriodForm.grossValue) * (1 - parseFloat(newPeriodForm.machineRate) / 100)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </span>
+        )}
+        <button
+          onClick={saveBillingPeriod}
+          disabled={savingPeriod || !newPeriodForm.fromMonth || !newPeriodForm.grossValue || !newPeriodForm.machineRate}
+          className="bg-yellow-500 hover:bg-yellow-600 disabled:opacity-40 text-white font-black text-[10px] uppercase tracking-widest px-3 py-1.5 rounded-lg transition-all"
+        >
+          {savingPeriod ? '...' : 'Salvar'}
+        </button>
       </div>
     </div>
 
