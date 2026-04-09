@@ -94,7 +94,7 @@ const App: React.FC = () => {
   const [billingConfig, setBillingConfig] = useState<BillingConfig>({ contractValue: 1599, machineRate: 10 });
 const [loadingBillingConfig, setLoadingBillingConfig] = useState(false);
 const [editingBillingValue, setEditingBillingValue] = useState<{ clientId: string; value: string } | null>(null);
-const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 'PENDING' | 'PAID'>>(() => {
+const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 'PENDING' | 'PAID' | 'DEFAULTED'>>(() => {
     try { return JSON.parse(localStorage.getItem('rnv_billing_payments') || '{}'); }
     catch { return {}; }
   });
@@ -439,7 +439,7 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
     if (!error) setBillingPeriods(prev => prev.filter(p => p.id !== id));
   };
 
-  const updateClientBillingStatus = (clientId: string, status: 'PENDING' | 'PAID', month?: string) => {
+  const updateClientBillingStatus = (clientId: string, status: 'PENDING' | 'PAID' | 'DEFAULTED', month?: string) => {
     const key = month ? `${clientId}-${month}` : clientId;
     setBillingPaymentStatus(prev => {
       const next = { ...prev, [key]: status };
@@ -448,7 +448,7 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
     });
   };
 
-  const getBillingStatus = (clientId: string, month: string): 'PENDING' | 'PAID' =>
+  const getBillingStatus = (clientId: string, month: string): 'PENDING' | 'PAID' | 'DEFAULTED' =>
     billingPaymentStatus[`${clientId}-${month}`] || billingPaymentStatus[clientId] || 'PENDING';
 
   const deleteClient = async (id: string) => {
@@ -1642,54 +1642,55 @@ const billingData = useMemo(() => {
     </div>
 
     {/* RESUMO FINANCEIRO */}
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-      <div className="bg-white p-6 rounded-2xl border shadow-sm">
-        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">A Receber (Total)</p>
-        <p className="text-3xl font-black text-slate-800">
-          R$ {Object.values(billingData.totals).reduce((a, b) => a + b, 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-        </p>
-      </div>
-
-      <div className="bg-white p-6 rounded-2xl border shadow-sm">
-        <p className="text-[10px] font-black text-red-500 uppercase tracking-widest mb-2">Pendente de Cobrar</p>
-        <p className="text-3xl font-black text-red-600">
-          R$ {clients
-            .reduce((sum, c) => {
-              const totalMeetings = 5 + (c.extraMeetings ?? 0);
-              const cycleMonths = getNextMonths(c.startMonthYear, totalMeetings);
-              const paymentMonth = cycleMonths[4];
-              const isInactive = isClientInactive(c);
-              const closedAtDate = c.closedAt ? new Date(c.closedAt + 'T12:00:00') : null;
-              const closedMonth = closedAtDate ? toMonthKey(closedAtDate) : null;
-              const relevantMonth = isInactive && closedMonth ? closedMonth : paymentMonth;
-              if (!relevantMonth) return sum;
-              if (getBillingStatus(c.id, relevantMonth) !== 'PENDING') return sum;
-              return sum + (billingData.billingByMonth[relevantMonth]?.find(b => b.clientId === c.id)?.amount || 0);
-            }, 0)
-            .toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-        </p>
-      </div>
-
-      <div className="bg-white p-6 rounded-2xl border shadow-sm">
-        <p className="text-[10px] font-black text-green-600 uppercase tracking-widest mb-2">Já Recebido</p>
-        <p className="text-3xl font-black text-green-600">
-          R$ {clients
-            .reduce((sum, c) => {
-              const totalMeetings = 5 + (c.extraMeetings ?? 0);
-              const cycleMonths = getNextMonths(c.startMonthYear, totalMeetings);
-              const paymentMonth = cycleMonths[4];
-              const isInactive = isClientInactive(c);
-              const closedAtDate = c.closedAt ? new Date(c.closedAt + 'T12:00:00') : null;
-              const closedMonth = closedAtDate ? toMonthKey(closedAtDate) : null;
-              const relevantMonth = isInactive && closedMonth ? closedMonth : paymentMonth;
-              if (!relevantMonth) return sum;
-              if (getBillingStatus(c.id, relevantMonth) !== 'PAID') return sum;
-              return sum + (billingData.billingByMonth[relevantMonth]?.find(b => b.clientId === c.id)?.amount || 0);
-            }, 0)
-            .toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-        </p>
-      </div>
-    </div>
+    {(() => {
+      const getRelevantMonth = (c: Client) => {
+        const totalMeetings = 5 + (c.extraMeetings ?? 0);
+        const cycleMonths = getNextMonths(c.startMonthYear, totalMeetings);
+        const isInactive = isClientInactive(c);
+        const closedAtDate = c.closedAt ? new Date(c.closedAt + 'T12:00:00') : null;
+        const closedMonth = closedAtDate ? toMonthKey(closedAtDate) : null;
+        return isInactive && closedMonth ? closedMonth : cycleMonths[4];
+      };
+      const totalBruto = Object.values(billingData.totals).reduce((a, b) => a + b, 0);
+      const totalDefaulted = clients.reduce((sum, c) => {
+        const m = getRelevantMonth(c);
+        if (!m || getBillingStatus(c.id, m) !== 'DEFAULTED') return sum;
+        return sum + (billingData.billingByMonth[m]?.find(b => b.clientId === c.id)?.amount || 0);
+      }, 0);
+      const totalPending = clients.reduce((sum, c) => {
+        const m = getRelevantMonth(c);
+        if (!m || getBillingStatus(c.id, m) !== 'PENDING') return sum;
+        return sum + (billingData.billingByMonth[m]?.find(b => b.clientId === c.id)?.amount || 0);
+      }, 0);
+      const totalPaid = clients.reduce((sum, c) => {
+        const m = getRelevantMonth(c);
+        if (!m || getBillingStatus(c.id, m) !== 'PAID') return sum;
+        return sum + (billingData.billingByMonth[m]?.find(b => b.clientId === c.id)?.amount || 0);
+      }, 0);
+      const fmt = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="bg-white p-6 rounded-2xl border shadow-sm">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">A Receber (Total)</p>
+            <p className="text-3xl font-black text-slate-800">R$ {fmt(totalBruto - totalDefaulted)}</p>
+            {totalDefaulted > 0 && (
+              <p className="text-[10px] font-bold text-red-400 mt-1 flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-red-400 inline-block flex-shrink-0" />
+                Inadimplência: − R$ {fmt(totalDefaulted)}
+              </p>
+            )}
+          </div>
+          <div className="bg-white p-6 rounded-2xl border shadow-sm">
+            <p className="text-[10px] font-black text-red-500 uppercase tracking-widest mb-2">Pendente de Cobrar</p>
+            <p className="text-3xl font-black text-red-600">R$ {fmt(totalPending)}</p>
+          </div>
+          <div className="bg-white p-6 rounded-2xl border shadow-sm">
+            <p className="text-[10px] font-black text-green-600 uppercase tracking-widest mb-2">Já Recebido</p>
+            <p className="text-3xl font-black text-green-600">R$ {fmt(totalPaid)}</p>
+          </div>
+        </div>
+      );
+    })()}
 
     {/* TABELA GRID COMPACTA */}
     <div className="bg-white border rounded-2xl shadow-xl overflow-hidden">
@@ -1751,12 +1752,14 @@ const billingData = useMemo(() => {
                         className={`rounded-lg px-3 py-2 border-2 transition-all ${
                           paymentStatus === 'PAID'
                             ? 'bg-green-50 border-green-300 shadow-sm'
+                            : paymentStatus === 'DEFAULTED'
+                            ? 'bg-red-50 border-red-200 shadow-sm'
                             : 'bg-white border-slate-200'
                         }`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 min-w-0">
-                            <p className="text-xs font-black text-slate-700 truncate">
+                            <p className={`text-xs font-black truncate ${paymentStatus === 'DEFAULTED' ? 'text-red-400 line-through' : 'text-slate-700'}`}>
                               R$ {item.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </p>
                             <p className="text-[10px] font-bold text-slate-600 truncate mt-0.5">
@@ -1774,15 +1777,28 @@ const billingData = useMemo(() => {
                             )}
                           </div>
 
-                         <button
-                            onClick={() => updateClientBillingStatus(client.id, paymentStatus === 'PENDING' ? 'PAID' : 'PENDING', month)}
-                            className={`w-5 h-5 rounded-full flex-shrink-0 transition-all border-2 ${
-                              paymentStatus === 'PAID'
-                                ? 'bg-green-500 border-green-600 shadow-sm'
-                                : 'bg-white border-slate-300 hover:border-green-400'
-                            }`}
-                            title={paymentStatus === 'PAID' ? 'Pago ✓ (clique para desmarcar)' : 'Marcar como pago'}
-                          />
+                          <div className="flex flex-col gap-1 flex-shrink-0">
+                            {/* Bolinha verde — pago */}
+                            <button
+                              onClick={() => updateClientBillingStatus(client.id, paymentStatus === 'PAID' ? 'PENDING' : 'PAID', month)}
+                              className={`w-5 h-5 rounded-full transition-all border-2 ${
+                                paymentStatus === 'PAID'
+                                  ? 'bg-green-500 border-green-600 shadow-sm'
+                                  : 'bg-white border-slate-300 hover:border-green-400'
+                              }`}
+                              title={paymentStatus === 'PAID' ? 'Pago ✓ (clique para desmarcar)' : 'Marcar como pago'}
+                            />
+                            {/* Bolinha vermelha — inadimplente */}
+                            <button
+                              onClick={() => updateClientBillingStatus(client.id, paymentStatus === 'DEFAULTED' ? 'PENDING' : 'DEFAULTED', month)}
+                              className={`w-5 h-5 rounded-full transition-all border-2 ${
+                                paymentStatus === 'DEFAULTED'
+                                  ? 'bg-red-500 border-red-600 shadow-sm'
+                                  : 'bg-white border-slate-200 hover:border-red-400'
+                              }`}
+                              title={paymentStatus === 'DEFAULTED' ? 'Inadimplente (clique para desmarcar)' : 'Marcar como inadimplente'}
+                            />
+                          </div>
                         </div>
                       </div>
                     );
