@@ -37,6 +37,9 @@ export interface Client {
   extraMeetings: number;
   closedAt?: string;
   contractSigned?: boolean;
+  contractValue?: number;   // valor líquido fixado na época do contrato (após taxa)
+  contractGrossValue?: number; // valor bruto fixado na época do contrato
+  contractMachineRate?: number; // taxa fixada na época do contrato
 }
 
 export interface Reminder {
@@ -47,27 +50,17 @@ export interface Reminder {
   status: MeetingStatus;
 }
 
-// ✅ NOVO — Faturamento
 export interface BillingConfig {
-  contractValue: number;  // Valor base do contrato (ex: 1599)
-  machineRate: number;    // Taxa em % (ex: 10)
+  contractValue: number;
+  machineRate: number;
 }
 
 export interface ClientBilling {
   clientId: string;
   clientName: string;
-  billingValue: number;   // Valor que recebe = contractValue - (contractValue * machineRate%)
-  paymentStatus: 'PENDING' | 'PAID';  // Status do pagamento
-  paymentDate: string;    // Data projetada de pagamento (YYYY-MM-DD)
-  amount: number;         // Valor a receber (inteiro ou proporcional)
-  isProportional?: boolean;  // Se foi encerrado antecipadamente
-}
-
-export interface Client {
-  // ... campos existentes ...
-  closedAt?: string;
-  contractSigned?: boolean;
-  
-  // ✅ NOVO — guardar valor do contrato na data de início
-  contractValue?: number;  // Valor que o cliente vai pagar (fixado na data de início)
+  billingValue: number;
+  paymentStatus: 'PENDING' | 'PAID';
+  paymentDate: string;
+  amount: number;
+  isProportional?: boolean;
 }

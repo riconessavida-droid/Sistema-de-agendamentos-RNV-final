@@ -46,7 +46,10 @@ const dbToClient = (row: DbClientRow): Client => ({
   statusByMonth: row.status_by_month || {},
   extraMeetings: row.extra_meetings ?? 0,
   closedAt: row.closed_at ?? undefined,
-  contractSigned: row.contract_signed ?? false
+  contractSigned: row.contract_signed ?? false,
+  contractGrossValue: (row as any).contract_gross_value ?? undefined,
+  contractMachineRate: (row as any).contract_machine_rate ?? undefined,
+  contractValue: (row as any).contract_value ?? undefined
 });
 
 const clientToDb = (client: Client) => ({
@@ -60,7 +63,10 @@ const clientToDb = (client: Client) => ({
   status_by_month: client.statusByMonth || {},
   extra_meetings: client.extraMeetings ?? 0,
   closed_at: client.closedAt ?? null,
-  contract_signed: client.contractSigned ?? false
+  contract_signed: client.contractSigned ?? false,
+  contract_gross_value: client.contractGrossValue ?? null,
+  contract_machine_rate: client.contractMachineRate ?? null,
+  contract_value: client.contractValue ?? null
 });
 
 const toMonthKey = (d: Date) =>
@@ -235,17 +241,21 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
   const colorIndex = clients.length % GROUP_COLORS.length;
   const groupColor = GROUP_COLORS[colorIndex];
   
-  // ✅ NOVO — calcula o valor do contrato (já com taxa deduzida) e fixa para este cliente
-  const currentValue = billingConfig.contractValue - (billingConfig.contractValue * billingConfig.machineRate / 100);
+  // Fixa os valores da época do contrato para este cliente
+  const grossValue = billingConfig.contractValue;
+  const rate = billingConfig.machineRate;
+  const netValue = grossValue - (grossValue * rate / 100);
 
   const newClient: Client = {
     ...data,
     id: crypto.randomUUID(),
     statusByMonth: {},
     groupColor,
-    sequenceInMonth: 0, // será calculado automaticamente
+    sequenceInMonth: 0,
     extraMeetings: data.extraMeetings ?? 0,
-    contractValue: currentValue  // ✅ NOVO — fixa o valor do contrato na data de criação
+    contractGrossValue: grossValue,
+    contractMachineRate: rate,
+    contractValue: netValue
   };
 
   setClients(prev => [...prev, newClient]);
@@ -1411,15 +1421,20 @@ const billingData = useMemo(() => {
     
     {/* CABEÇALHO + CONFIG */}
     <div className="bg-white p-6 rounded-2xl border shadow-sm space-y-4">
-      <h2 className="text-xl font-black flex items-center gap-3 text-slate-800">
-        <Trophy className="text-yellow-500 w-7 h-7" /> Faturamento
-      </h2>
-      
+      <div>
+        <h2 className="text-xl font-black flex items-center gap-3 text-slate-800">
+          <Trophy className="text-yellow-500 w-7 h-7" /> Faturamento
+        </h2>
+        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">
+          Valores abaixo aplicam-se apenas aos novos clientes — contratos existentes mantêm o valor fixado na data de entrada
+        </p>
+      </div>
+
       {/* CARDS DE CONFIG */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {/* Valor do Contrato */}
         <div className="bg-slate-50 p-4 rounded-xl border">
-          <label className="text-[10px] font-black text-slate-400 uppercase block mb-2">Valor do Contrato</label>
+          <label className="text-[10px] font-black text-slate-400 uppercase block mb-2">Valor do Contrato (novos clientes)</label>
           <div className="flex items-center gap-2">
             <span className="text-sm font-black text-slate-600">R$</span>
             <input
@@ -1580,6 +1595,11 @@ const billingData = useMemo(() => {
                             <p className="text-[10px] font-bold text-slate-600 truncate mt-0.5">
                               {client.name}
                             </p>
+                            {client.contractGrossValue && (
+                              <p className="text-[8px] text-slate-400 font-bold">
+                                Contrato: R$ {client.contractGrossValue.toLocaleString('pt-BR')} • {client.contractMachineRate}% taxa
+                              </p>
+                            )}
                             {item.isProportional && (
                               <span className="text-[8px] font-black bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded inline-block mt-1 uppercase">
                                 Prop.
