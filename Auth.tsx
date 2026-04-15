@@ -17,11 +17,13 @@ interface AuthProps {
 
 export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
   const [isLogin, setIsLogin] = useState(true);
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [role, setRole] = useState<UserRole>(UserRole.ASSISTANT); // Forçado para ASSISTANT
   const [error, setError] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -110,6 +112,27 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     });
   };
 
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSuccessMsg('');
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin
+      });
+      if (error) {
+        setError(error.message);
+      } else {
+        setSuccessMsg('E-mail de redefinição enviado! Verifique sua caixa de entrada.');
+      }
+    } catch {
+      setError('Erro inesperado. Tente novamente.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -173,6 +196,74 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
       setLoading(false);
     }
   };
+
+  // --- TELA DE ESQUECEU A SENHA ---
+  if (isForgotPassword) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]">
+        <div className="w-full max-w-md">
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center justify-center p-3 bg-yellow-500 rounded-2xl shadow-lg mb-4">
+              <TrendingUp className="text-white w-8 h-8" />
+            </div>
+            <h1 className="text-3xl font-black text-slate-800 tracking-tight">RNV Consultoria</h1>
+            <p className="text-slate-500 font-medium text-sm">Redefinir Senha</p>
+          </div>
+
+          <div className="bg-white rounded-3xl shadow-2xl overflow-hidden border border-slate-200">
+            <form onSubmit={handleForgotPassword} className="p-8 space-y-5">
+              <p className="text-xs text-slate-500 font-semibold text-center">
+                Informe o e-mail cadastrado. Vamos enviar um link para você criar uma nova senha.
+              </p>
+
+              {error && (
+                <div className="p-3 bg-red-50 border border-red-100 text-red-600 text-[10px] font-black rounded-xl text-center uppercase tracking-wider">
+                  {error}
+                </div>
+              )}
+              {successMsg && (
+                <div className="p-3 bg-green-50 border border-green-100 text-green-700 text-[10px] font-black rounded-xl text-center uppercase tracking-wider">
+                  {successMsg}
+                </div>
+              )}
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">E-mail de Acesso</label>
+                <div className="relative">
+                  <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    required
+                    type="email"
+                    className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-yellow-500/10 focus:border-yellow-500 transition-all text-sm font-bold text-slate-700"
+                    placeholder="seu@email.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading || !!successMsg}
+                className="w-full bg-yellow-500 hover:bg-yellow-600 disabled:bg-slate-400 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-xl shadow-yellow-500/30 transition-all active:scale-[0.97] flex items-center justify-center gap-3 mt-4"
+              >
+                {loading ? 'Enviando...' : 'Enviar Link de Redefinição'}
+                {!loading && <ArrowRight className="w-4 h-4" />}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setIsForgotPassword(false); setError(''); setSuccessMsg(''); }}
+                className="w-full text-slate-400 hover:text-slate-600 text-[10px] font-black uppercase tracking-widest py-2 transition-all"
+              >
+                ← Voltar para o Login
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]">
@@ -280,6 +371,15 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                   onChange={(e) => setPassword(e.target.value)}
                 />
               </div>
+              {isLogin && (
+                <button
+                  type="button"
+                  onClick={() => { setIsForgotPassword(true); setError(''); }}
+                  className="ml-1 text-[10px] text-yellow-600 hover:text-yellow-700 font-black uppercase tracking-wider transition-all"
+                >
+                  Esqueceu a senha?
+                </button>
+              )}
             </div>
 
             <button
