@@ -17,7 +17,7 @@ import { supabase } from './supabaseClient';
 
 const SESSION_KEY = 'rnv_current_session';
 
-type TabType = 'overview' | 'checklist' | 'reports' | 'users' | 'tasks' | 'billing';
+type TabType = 'overview' | 'checklist' | 'reports' | 'users' | 'tasks' | 'billing' | 'history';
 type ChecklistSubFilter = 'all' | 'pending' | 'not_done' | 'rescheduled';
 type StatusFilter = 'all' | 'active' | 'finalized' | 'needs_attention' | 'unsigned';
 
@@ -482,9 +482,9 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
   // ✅ NOVO: se está marcando como Contrato Encerrado,
   // guarda a data de hoje. Se não, mantém o que já tinha.
   const closedAt =
-    updates.status === MeetingStatus.CLOSED_CONTRACT
-      ? new Date().toISOString().split('T')[0]  // ex: "2026-03-05"
-      : client.closedAt;                         // mantém a data anterior
+    (updates.status === MeetingStatus.CLOSED_CONTRACT || updates.status === MeetingStatus.CANCELLED_EARLY)
+      ? (client.closedAt ?? new Date().toISOString().split('T')[0])
+      : client.closedAt;
 
   const updatedClient = {
     ...client,
@@ -680,22 +680,30 @@ const billingData = useMemo(() => {
     let amount = clientContractValue;
     let isProportional = false;
     
-    if (isInactive && closedAtDate) {
-      paymentMonthKey = toMonthKey(closedAtDate);
-      
+    const calcProportional = (referenceDate: Date) => {
       const startDate = new Date(client.startMonthYear + '-01');
-      const diffMs = closedAtDate.getTime() - startDate.getTime();
+      const diffMs = referenceDate.getTime() - startDate.getTime();
       const diffMonths = Math.ceil(diffMs / (1000 * 60 * 60 * 24 * 30));
       const monthsUntilClosed = Math.min(Math.max(diffMonths, 1), 5);
-      
-      // ✅ SÓ proporcional se fechou ANTES de 5 meses (1, 2, 3 ou 4 meses)
       if (monthsUntilClosed < 5) {
         amount = (clientContractValue / 5) * monthsUntilClosed;
         isProportional = true;
+      }
+    };
+
+    if (isInactive && closedAtDate) {
+      paymentMonthKey = toMonthKey(closedAtDate);
+      calcProportional(closedAtDate);
+    } else if (isInactive) {
+      // Dados legados: sem closedAt — infere o mês pelo statusByMonth
+      const closedEntry = (Object.entries(client.statusByMonth) as Array<[string, { status: MeetingStatus }]>).find(
+        ([, v]) => v.status === MeetingStatus.CANCELLED_EARLY || v.status === MeetingStatus.CLOSED_CONTRACT
+      );
+      if (closedEntry) {
+        paymentMonthKey = closedEntry[0];
+        calcProportional(new Date(closedEntry[0] + '-01'));
       } else {
-        // Fechou no 5º mês ou depois — valor completo
-        amount = clientContractValue;
-        isProportional = false;
+        paymentMonthKey = cycleMonths[4];
       }
     } else {
       // Cliente ativo — paga no 5º mês
@@ -849,6 +857,7 @@ const billingData = useMemo(() => {
           <button onClick={() => setActiveTab('overview')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'overview' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Visão Geral</button>
           <button onClick={() => setActiveTab('checklist')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'checklist' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Checklist Mensal</button>
           <button onClick={() => setActiveTab('tasks')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'tasks' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Tarefas do Dia</button>
+          <button onClick={() => setActiveTab('history')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'history' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Histórico</button>
           {currentUser.role === UserRole.ADMIN && (
             <>
               <button onClick={() => setActiveTab('reports')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'reports' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Relatórios</button>
@@ -2016,6 +2025,123 @@ const billingData = useMemo(() => {
             )}
           </div>
         )}
+
+        {/* ===== ABA: HISTÓRICO ===== */}
+        {activeTab === 'history' && (() => {
+          const finalized = clients
+            .filter(c => Object.values(c.statusByMonth).some((s: { status: MeetingStatus }) => s.status === MeetingStatus.CLOSED_CONTRACT))
+            .sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''));
+          const cancelled = clients
+            .filter(c => Object.values(c.statusByMonth).some((s: { status: MeetingStatus }) => s.status === MeetingStatus.CANCELLED_EARLY))
+            .sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''));
+
+          const getEndInfo = (c: Client) => {
+            if (c.closedAt) {
+              const d = new Date(c.closedAt + 'T12:00:00');
+              return { month: toMonthKey(d), date: d.toLocaleDateString('pt-BR') };
+            }
+            const entry = (Object.entries(c.statusByMonth) as Array<[string, { status: MeetingStatus }]>).find(
+              ([, v]) => v.status === MeetingStatus.CANCELLED_EARLY || v.status === MeetingStatus.CLOSED_CONTRACT
+            );
+            return { month: entry?.[0] ?? null, date: null };
+          };
+
+          const statusStyle = (s: MeetingStatus) => {
+            switch (s) {
+              case MeetingStatus.DONE: return 'bg-green-100 text-green-700';
+              case MeetingStatus.NOT_DONE: return 'bg-red-100 text-red-600';
+              case MeetingStatus.RESCHEDULED: return 'bg-blue-100 text-blue-600';
+              case MeetingStatus.CANCELLED_EARLY: return 'bg-red-200 text-red-800';
+              case MeetingStatus.CLOSED_CONTRACT: return 'bg-slate-100 text-slate-500';
+              default: return 'bg-slate-50 text-slate-300';
+            }
+          };
+          const statusText = (s: MeetingStatus) => {
+            switch (s) {
+              case MeetingStatus.DONE: return 'Realizada';
+              case MeetingStatus.NOT_DONE: return 'Não Realizada';
+              case MeetingStatus.RESCHEDULED: return 'Remarcada';
+              case MeetingStatus.CANCELLED_EARLY: return 'Cancelado';
+              case MeetingStatus.CLOSED_CONTRACT: return 'Finalizado';
+              default: return 'Pendente';
+            }
+          };
+          const shortMo = (m: string) => {
+            const mo = parseInt(m.split('-')[1]) - 1;
+            return ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'][mo];
+          };
+
+          const renderCard = (client: Client, accentClass: string) => {
+            const totalMeetings = 5 + (client.extraMeetings ?? 0);
+            const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
+            const { month: endMonth, date: endDate } = getEndInfo(client);
+            const done = cycleMonths.filter(m => client.statusByMonth[m]?.status === MeetingStatus.DONE).length;
+            return (
+              <div key={client.id} className={`bg-white rounded-xl border-2 ${accentClass} shadow-sm p-4 flex flex-col gap-3`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-black text-sm text-slate-800 uppercase truncate">{client.name}</p>
+                    <p className="text-[10px] text-slate-400 font-bold mt-0.5">
+                      {getMonthLabel(client.startMonthYear)}
+                      {endMonth ? ` → ${getMonthLabel(endMonth)}` : ''}
+                      {endDate ? ` · Enc. ${endDate}` : ''}
+                    </p>
+                  </div>
+                  <span className="text-[10px] font-black text-slate-400 flex-shrink-0">{done}/{totalMeetings} reuniões</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {cycleMonths.map((m, i) => {
+                    const st = client.statusByMonth[m]?.status ?? MeetingStatus.PENDING;
+                    return (
+                      <span key={m} className={`text-[9px] font-black px-2 py-1 rounded-lg ${statusStyle(st)}`}>
+                        {i + 1}ª · {shortMo(m)}: {statusText(st)}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          };
+
+          return (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+              <div className="bg-white p-6 rounded-2xl border shadow-sm">
+                <h2 className="text-xl font-black flex items-center gap-3 text-slate-800">
+                  <ClipboardCheck className="text-yellow-500 w-7 h-7" /> Histórico de Contratos
+                </h2>
+                <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">
+                  {finalized.length} finalizado{finalized.length !== 1 ? 's' : ''} &bull; {cancelled.length} cancelado{cancelled.length !== 1 ? 's' : ''} antecipadamente
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <h3 className="text-xs font-black text-slate-700 uppercase tracking-widest flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-green-500" /> Contratos Finalizados ({finalized.length})
+                </h3>
+                {finalized.length === 0 ? (
+                  <div className="bg-white rounded-xl border p-8 text-center text-slate-400 font-bold text-sm">Nenhum contrato finalizado ainda.</div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {finalized.map(c => renderCard(c, 'border-green-200'))}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-3">
+                <h3 className="text-xs font-black text-slate-700 uppercase tracking-widest flex items-center gap-2">
+                  <XCircle className="w-4 h-4 text-red-500" /> Cancelamentos Antecipados ({cancelled.length})
+                </h3>
+                {cancelled.length === 0 ? (
+                  <div className="bg-white rounded-xl border p-8 text-center text-slate-400 font-bold text-sm">Nenhum cancelamento antecipado.</div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {cancelled.map(c => renderCard(c, 'border-red-200'))}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </main>
 
       {/* MODAL */}
