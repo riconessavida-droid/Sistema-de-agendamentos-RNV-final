@@ -103,6 +103,7 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
   const [savingPeriod, setSavingPeriod] = useState(false);
   const [draggingClientId, setDraggingClientId] = useState<string | null>(null);
   const [dragOverMonth, setDragOverMonth] = useState<string | null>(null);
+  const [historySearch, setHistorySearch] = useState('');
   const [billingMonthOverrides, setBillingMonthOverrides] = useState<Record<string, string>>(() => {
     try { return JSON.parse(localStorage.getItem('rnv_billing_month_overrides') || '{}'); }
     catch { return {}; }
@@ -2026,11 +2027,14 @@ const billingData = useMemo(() => {
 
         {/* ===== ABA: HISTÓRICO ===== */}
         {activeTab === 'history' && (() => {
+          const q = historySearch.toLowerCase().trim();
           const finalized = clients
             .filter(c => Object.values(c.statusByMonth).some((s: { status: MeetingStatus }) => s.status === MeetingStatus.CLOSED_CONTRACT))
+            .filter(c => !q || c.name.toLowerCase().includes(q))
             .sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''));
           const cancelled = clients
             .filter(c => Object.values(c.statusByMonth).some((s: { status: MeetingStatus }) => s.status === MeetingStatus.CANCELLED_EARLY))
+            .filter(c => !q || c.name.toLowerCase().includes(q))
             .sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''));
 
           const getEndInfo = (c: Client) => {
@@ -2103,13 +2107,25 @@ const billingData = useMemo(() => {
 
           return (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-              <div className="bg-white p-6 rounded-2xl border shadow-sm">
-                <h2 className="text-xl font-black flex items-center gap-3 text-slate-800">
-                  <ClipboardCheck className="text-yellow-500 w-7 h-7" /> Histórico de Contratos
-                </h2>
-                <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">
-                  {finalized.length} finalizado{finalized.length !== 1 ? 's' : ''} &bull; {cancelled.length} cancelado{cancelled.length !== 1 ? 's' : ''} antecipadamente
-                </p>
+              <div className="bg-white p-6 rounded-2xl border shadow-sm flex flex-col sm:flex-row sm:items-center gap-4">
+                <div className="flex-1">
+                  <h2 className="text-xl font-black flex items-center gap-3 text-slate-800">
+                    <ClipboardCheck className="text-yellow-500 w-7 h-7" /> Histórico de Contratos
+                  </h2>
+                  <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">
+                    {finalized.length} finalizado{finalized.length !== 1 ? 's' : ''} &bull; {cancelled.length} cancelado{cancelled.length !== 1 ? 's' : ''} antecipadamente
+                  </p>
+                </div>
+                <div className="relative w-full sm:w-64">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                  <input
+                    type="text"
+                    placeholder="Buscar por nome..."
+                    value={historySearch}
+                    onChange={e => setHistorySearch(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 text-sm font-bold border rounded-xl outline-none focus:ring-2 focus:ring-yellow-400 bg-slate-50 text-slate-700 placeholder-slate-300"
+                  />
+                </div>
               </div>
 
               <div className="space-y-3">
