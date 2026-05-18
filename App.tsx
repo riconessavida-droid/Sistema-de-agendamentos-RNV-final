@@ -671,37 +671,29 @@ const billingData = useMemo(() => {
     const totalMeetings = 5 + (client.extraMeetings ?? 0);
     const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
     const isInactive = isClientInactive(client);
-    const closedAtDate = client.closedAt ? new Date(client.closedAt + 'T12:00:00') : null;
-    
     // ✅ USA O VALOR FIXADO DO CLIENTE (ou o valor atual se não tem)
     const clientContractValue = client.contractValue || currentContractValue;
-    
+
     let paymentMonthKey: string;
     let amount = clientContractValue;
     let isProportional = false;
-    
-    const calcProportional = (referenceDate: Date) => {
-      const startDate = new Date(client.startMonthYear + '-01');
-      const diffMs = referenceDate.getTime() - startDate.getTime();
-      const diffMonths = Math.ceil(diffMs / (1000 * 60 * 60 * 24 * 30));
-      const monthsUntilClosed = Math.min(Math.max(diffMonths, 1), 5);
-      if (monthsUntilClosed < 5) {
-        amount = (clientContractValue / 5) * monthsUntilClosed;
-        isProportional = true;
-      }
-    };
 
-    if (isInactive && closedAtDate) {
-      paymentMonthKey = toMonthKey(closedAtDate);
-      calcProportional(closedAtDate);
-    } else if (isInactive) {
-      // Dados legados: sem closedAt — infere o mês pelo statusByMonth
+    if (isInactive) {
+      // Usa o mês do statusByMonth onde CANCELLED_EARLY ou CLOSED_CONTRACT foi marcado.
+      // Ignora closedAt para cálculo — closedAt é data administrativa, não o mês real do cancelamento.
       const closedEntry = (Object.entries(client.statusByMonth) as Array<[string, { status: MeetingStatus }]>).find(
         ([, v]) => v.status === MeetingStatus.CANCELLED_EARLY || v.status === MeetingStatus.CLOSED_CONTRACT
       );
       if (closedEntry) {
         paymentMonthKey = closedEntry[0];
-        calcProportional(new Date(closedEntry[0] + '-01'));
+        const [sy, sm] = client.startMonthYear.split('-').map(Number);
+        const [cy, cm] = closedEntry[0].split('-').map(Number);
+        const monthsInContract = (cy - sy) * 12 + (cm - sm) + 1;
+        const monthsUntilClosed = Math.min(Math.max(monthsInContract, 1), 5);
+        if (monthsUntilClosed < 5) {
+          amount = (clientContractValue / 5) * monthsUntilClosed;
+          isProportional = true;
+        }
       } else {
         paymentMonthKey = cycleMonths[4];
       }
@@ -1732,8 +1724,8 @@ const billingData = useMemo(() => {
                     return (
                       <div
                         key={item.clientId}
-                        draggable={!isInactive}
-                        onDragStart={() => { if (!isInactive) setDraggingClientId(item.clientId); }}
+                        draggable={true}
+                        onDragStart={() => setDraggingClientId(item.clientId)}
                         onDragEnd={() => { setDraggingClientId(null); setDragOverMonth(null); }}
                         className={`rounded-lg px-3 py-2 border-2 transition-all ${
                           paymentStatus === 'PAID'
@@ -1741,7 +1733,7 @@ const billingData = useMemo(() => {
                             : paymentStatus === 'DEFAULTED'
                             ? 'bg-red-50 border-red-200 shadow-sm'
                             : 'bg-white border-slate-200'
-                        } ${!isInactive ? 'cursor-grab active:cursor-grabbing select-none' : ''} ${draggingClientId === item.clientId ? 'opacity-40' : ''}`}
+                        } cursor-grab active:cursor-grabbing select-none ${draggingClientId === item.clientId ? 'opacity-40' : ''}`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 min-w-0">
