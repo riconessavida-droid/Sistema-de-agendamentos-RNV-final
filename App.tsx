@@ -101,6 +101,8 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
   const [billingPeriods, setBillingPeriods] = useState<BillingPeriod[]>([]);
   const [newPeriodForm, setNewPeriodForm] = useState({ fromMonth: '', toMonth: '', grossValue: '', machineRate: '' });
   const [savingPeriod, setSavingPeriod] = useState(false);
+  const [draggingClientId, setDraggingClientId] = useState<string | null>(null);
+  const [dragOverMonth, setDragOverMonth] = useState<string | null>(null);
 
   const [visibleMonths, setVisibleMonths] = useState<string[]>(() => {
     const months: string[] = [];
@@ -1664,7 +1666,22 @@ const billingData = useMemo(() => {
             const monthLabel = new Date(month + '-01').toLocaleDateString('pt-BR', { month: 'long', year: '2-digit' }).toUpperCase();
             
             return (
-              <div key={month} className="flex flex-col gap-2 min-w-[220px]">
+              <div
+                key={month}
+                className={`flex flex-col gap-2 min-w-[220px] rounded-xl transition-all ${dragOverMonth === month && draggingClientId ? 'ring-2 ring-yellow-400 bg-yellow-50/30' : ''}`}
+                onDragOver={(e) => { e.preventDefault(); setDragOverMonth(month); }}
+                onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverMonth(null); }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (draggingClientId) {
+                    const [yr, mo] = month.split('-').map(Number);
+                    const newStart = addMonths(new Date(yr, mo - 1, 1), -4);
+                    updateClient(draggingClientId, { startMonthYear: toMonthKey(newStart) });
+                    setDraggingClientId(null);
+                    setDragOverMonth(null);
+                  }
+                }}
+              >
                 {/* HEADER DO MÊS */}
                 <div className="bg-gradient-to-r from-yellow-400 to-yellow-500 text-white px-4 py-3 rounded-xl font-black text-center text-sm shadow-md">
                   {monthLabel}
@@ -1706,13 +1723,16 @@ const billingData = useMemo(() => {
                     return (
                       <div
                         key={item.clientId}
+                        draggable={!isInactive}
+                        onDragStart={() => { if (!isInactive) setDraggingClientId(item.clientId); }}
+                        onDragEnd={() => { setDraggingClientId(null); setDragOverMonth(null); }}
                         className={`rounded-lg px-3 py-2 border-2 transition-all ${
                           paymentStatus === 'PAID'
                             ? 'bg-green-50 border-green-300 shadow-sm'
                             : paymentStatus === 'DEFAULTED'
                             ? 'bg-red-50 border-red-200 shadow-sm'
                             : 'bg-white border-slate-200'
-                        }`}
+                        } ${!isInactive ? 'cursor-grab active:cursor-grabbing select-none' : ''} ${draggingClientId === item.clientId ? 'opacity-40' : ''}`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 min-w-0">
