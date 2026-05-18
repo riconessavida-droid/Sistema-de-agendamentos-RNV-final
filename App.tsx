@@ -103,6 +103,10 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
   const [savingPeriod, setSavingPeriod] = useState(false);
   const [draggingClientId, setDraggingClientId] = useState<string | null>(null);
   const [dragOverMonth, setDragOverMonth] = useState<string | null>(null);
+  const [billingMonthOverrides, setBillingMonthOverrides] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem('rnv_billing_month_overrides') || '{}'); }
+    catch { return {}; }
+  });
 
   const [visibleMonths, setVisibleMonths] = useState<string[]>(() => {
     const months: string[] = [];
@@ -651,27 +655,16 @@ const clientsWithAutoSequence = useMemo(() => {
 
 const billingData = useMemo(() => {
   const currentContractValue = billingConfig.contractValue - (billingConfig.contractValue * billingConfig.machineRate / 100);
-  
-  const today = new Date();
-  const currentMonthKey = toMonthKey(today);
-  const months: string[] = [];
-  
-  for (let i = 0; i < 12; i++) {
-    const d = addMonths(new Date(currentMonthKey + '-01'), i);
-    months.push(toMonthKey(d));
-  }
-  
-  const billingByMonth: Record<string, Array<{ clientId: string; clientName: string; amount: number; isProportional: boolean }>> = {};
-  
-  months.forEach(m => {
-    billingByMonth[m] = [];
-  });
-  
+  const currentMonthKey = toMonthKey(new Date());
+
+  // 1ª passagem: calcular mês e valor de cobrança de cada cliente
+  type Entry = { clientId: string; clientName: string; amount: number; isProportional: boolean; paymentMonthKey: string };
+  const entries: Entry[] = [];
+
   clients.forEach(client => {
     const totalMeetings = 5 + (client.extraMeetings ?? 0);
     const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
     const isInactive = isClientInactive(client);
-    // ✅ USA O VALOR FIXADO DO CLIENTE (ou o valor atual se não tem)
     const clientContractValue = client.contractValue || currentContractValue;
 
     let paymentMonthKey: string;
@@ -679,8 +672,6 @@ const billingData = useMemo(() => {
     let isProportional = false;
 
     if (isInactive) {
-      // Usa o mês do statusByMonth onde CANCELLED_EARLY ou CLOSED_CONTRACT foi marcado.
-      // Ignora closedAt para cálculo — closedAt é data administrativa, não o mês real do cancelamento.
       const closedEntry = (Object.entries(client.statusByMonth) as Array<[string, { status: MeetingStatus }]>).find(
         ([, v]) => v.status === MeetingStatus.CANCELLED_EARLY || v.status === MeetingStatus.CLOSED_CONTRACT
       );
@@ -698,32 +689,47 @@ const billingData = useMemo(() => {
         paymentMonthKey = cycleMonths[4];
       }
     } else {
-      // Cliente ativo — paga no 5º mês
       paymentMonthKey = cycleMonths[4];
     }
-    
-    if (billingByMonth[paymentMonthKey]) {
-      billingByMonth[paymentMonthKey].push({
-        clientId: client.id,
-        clientName: client.name,
-        amount,
-        isProportional
-      });
+
+    // Override manual via drag-and-drop — sem alterar histórico do cliente
+    const override = billingMonthOverrides[client.id];
+    if (override) paymentMonthKey = override;
+
+    entries.push({ clientId: client.id, clientName: client.name, amount, isProportional, paymentMonthKey });
+  });
+
+  // 2ª passagem: determinar range de meses dinamicamente (inclui passado se necessário)
+  const futureEnd = toMonthKey(addMonths(new Date(currentMonthKey + '-01'), 11));
+  const allMonths = entries.map(e => e.paymentMonthKey);
+  const minMonth = allMonths.length ? allMonths.reduce((a, b) => (a < b ? a : b)) : currentMonthKey;
+  const maxMonth = allMonths.length ? allMonths.reduce((a, b) => (a > b ? a : b)) : futureEnd;
+  const effectiveMax = maxMonth > futureEnd ? maxMonth : futureEnd;
+
+  const months: string[] = [];
+  let cur = new Date(minMonth + '-01');
+  const endDate = new Date(effectiveMax + '-01');
+  while (cur <= endDate) {
+    months.push(toMonthKey(cur));
+    cur = addMonths(cur, 1);
+  }
+
+  const billingByMonth: Record<string, Array<{ clientId: string; clientName: string; amount: number; isProportional: boolean }>> = {};
+  months.forEach(m => { billingByMonth[m] = []; });
+
+  entries.forEach(e => {
+    if (billingByMonth[e.paymentMonthKey]) {
+      billingByMonth[e.paymentMonthKey].push({ clientId: e.clientId, clientName: e.clientName, amount: e.amount, isProportional: e.isProportional });
     }
   });
-  
+
   const totals: Record<string, number> = {};
-  months.forEach(m => {
-    totals[m] = billingByMonth[m].reduce((sum, item) => sum + item.amount, 0);
-  });
-  
-  const maxClientsInMonth = Math.max(
-    ...months.map(m => billingByMonth[m].length),
-    1
-  );
-  
+  months.forEach(m => { totals[m] = billingByMonth[m].reduce((sum, item) => sum + item.amount, 0); });
+
+  const maxClientsInMonth = Math.max(...months.map(m => billingByMonth[m].length), 1);
+
   return { billingByMonth, totals, calculatedValue: currentContractValue, months, maxClientsInMonth };
-}, [clients, billingConfig]);
+}, [clients, billingConfig, billingMonthOverrides]);
   
   const taskReminders = useMemo(() => {
   const today = new Date();
@@ -1675,9 +1681,9 @@ const billingData = useMemo(() => {
                 onDrop={(e) => {
                   e.preventDefault();
                   if (draggingClientId) {
-                    const [yr, mo] = month.split('-').map(Number);
-                    const newStart = addMonths(new Date(yr, mo - 1, 1), -4);
-                    updateClient(draggingClientId, { startMonthYear: toMonthKey(newStart) });
+                    const updated = { ...billingMonthOverrides, [draggingClientId]: month };
+                    setBillingMonthOverrides(updated);
+                    localStorage.setItem('rnv_billing_month_overrides', JSON.stringify(updated));
                     setDraggingClientId(null);
                     setDragOverMonth(null);
                   }
