@@ -262,8 +262,8 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
   if (isClientInactive(client)) return false;
   const totalMeetings = 5 + (client.extraMeetings ?? 0);
   const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
-  // Laranja apenas no último mês (5ª reunião), não no penúltimo
-  return toMonthKey(new Date()) >= cycleMonths[totalMeetings - 1];
+  const doneCount = cycleMonths.filter(m => client.statusByMonth[m]?.status === MeetingStatus.DONE).length;
+  return doneCount === totalMeetings - 1;
 };
 
 const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor' | 'sequenceInMonth'>) => {
@@ -961,7 +961,7 @@ const billingData = useMemo(() => {
                       const orange = isOrangeClient(client);
 
                       return (
-                        <tr key={client.id} className={`hover:bg-slate-50/50 transition-colors ${inactive ? 'bg-slate-50/50' : ''}`}>
+                        <tr key={client.id} className={`hover:bg-slate-50/50 transition-colors ${orange ? 'bg-orange-50' : inactive ? 'bg-slate-50/50' : ''}`}>
 
                           {/* COLUNA DE IDENTIFICAÇÃO */}
                           <td className={`px-4 py-4 sticky left-0 z-20 w-80 border-r shadow-sm transition-colors ${orange ? 'bg-orange-500 text-white' : inactive ? 'bg-slate-200 text-slate-500' : client.groupColor}`}>
