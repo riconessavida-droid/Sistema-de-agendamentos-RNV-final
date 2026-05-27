@@ -94,10 +94,7 @@ const App: React.FC = () => {
   const [billingConfig, setBillingConfig] = useState<BillingConfig>({ contractValue: 1599, machineRate: 10 });
 const [loadingBillingConfig, setLoadingBillingConfig] = useState(false);
 const [editingBillingValue, setEditingBillingValue] = useState<{ clientId: string; value: string } | null>(null);
-const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 'PENDING' | 'PAID' | 'DEFAULTED'>>(() => {
-    try { return JSON.parse(localStorage.getItem('rnv_billing_payments') || '{}'); }
-    catch { return {}; }
-  });
+const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 'PENDING' | 'PAID' | 'DEFAULTED'>>({});
   const [billingPeriods, setBillingPeriods] = useState<BillingPeriod[]>([]);
   const [newPeriodForm, setNewPeriodForm] = useState({ fromMonth: '', toMonth: '', grossValue: '', machineRate: '' });
   const [savingPeriod, setSavingPeriod] = useState(false);
@@ -206,6 +203,21 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
       })));
     };
     loadBillingPeriods();
+  }, [currentUser]);
+
+  useEffect(() => {
+    const loadBillingPayments = async () => {
+      if (!currentUser) return;
+      const { data } = await supabase.from('billing_payments').select('*');
+      if (data) {
+        const map: Record<string, 'PENDING' | 'PAID' | 'DEFAULTED'> = {};
+        data.forEach((r: { client_id: string; month_key: string; status: string }) => {
+          map[`${r.client_id}-${r.month_key}`] = r.status as 'PAID' | 'DEFAULTED' | 'PENDING';
+        });
+        setBillingPaymentStatus(map);
+      }
+    };
+    loadBillingPayments();
   }, [currentUser]);
 
   useEffect(() => {
@@ -447,12 +459,14 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
   };
 
   const updateClientBillingStatus = (clientId: string, status: 'PENDING' | 'PAID' | 'DEFAULTED', month?: string) => {
-    const key = month ? `${clientId}-${month}` : clientId;
-    setBillingPaymentStatus(prev => {
-      const next = { ...prev, [key]: status };
-      localStorage.setItem('rnv_billing_payments', JSON.stringify(next));
-      return next;
-    });
+    const monthKey = month || 'all';
+    const key = `${clientId}-${monthKey}`;
+    setBillingPaymentStatus(prev => ({ ...prev, [key]: status }));
+    if (status === 'PENDING') {
+      supabase.from('billing_payments').delete().eq('client_id', clientId).eq('month_key', monthKey).then(() => {});
+    } else {
+      supabase.from('billing_payments').upsert({ client_id: clientId, month_key: monthKey, status }).then(() => {});
+    }
   };
 
   const getBillingStatus = (clientId: string, month: string): 'PENDING' | 'PAID' | 'DEFAULTED' =>
