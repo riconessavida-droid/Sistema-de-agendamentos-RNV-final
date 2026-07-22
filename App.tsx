@@ -139,16 +139,15 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
   const [draggingClientId, setDraggingClientId] = useState<string | null>(null);
   const [dragOverMonth, setDragOverMonth] = useState<string | null>(null);
   const [historySearch, setHistorySearch] = useState('');
-  const [pendingBookings, setPendingBookings] = useState<EagendaBooking[]>([]);
-  const [loadingBookings, setLoadingBookings] = useState(false);
+  const [boardBookings, setBoardBookings] = useState<EagendaBooking[]>([]);
+  const [loadingBoard, setLoadingBoard] = useState(false);
   const [conciliationSelections, setConciliationSelections] = useState<Record<string, string>>({});
   const [processingBooking, setProcessingBooking] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [importWindow, setImportWindow] = useState<number>(45);
-  const [matchedBookings, setMatchedBookings] = useState<EagendaBooking[]>([]);
-  const [showMatched, setShowMatched] = useState(false);
-  const [loadingMatched, setLoadingMatched] = useState(false);
   const [editingBooking, setEditingBooking] = useState<string | null>(null);
+  const [conciliationFilter, setConciliationFilter] = useState<'all' | 'pending' | 'done'>('all');
+  const [conciliationSearch, setConciliationSearch] = useState('');
   const [billingMonthOverrides, setBillingMonthOverrides] = useState<Record<string, string>>(() => {
     try { return JSON.parse(localStorage.getItem('rnv_billing_month_overrides') || '{}'); }
     catch { return {}; }
@@ -203,25 +202,25 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
     loadClients();
   }, [currentUser]);
 
-  // Fila de conciliação do eAgenda: carrega no login e atualiza a cada 30s
-  // enquanto a aba estiver aberta (mantém o padrão simples do app, sem realtime).
-  const loadPendingBookings = async () => {
+  // Painel de conciliação: carrega os agendamentos JÁ conciliados (MATCHED).
+  // O painel cruza esses contra os clientes ativos do sistema.
+  const loadBoard = async () => {
     if (!currentUser) return;
-    setLoadingBookings(true);
+    setLoadingBoard(true);
     const { data, error } = await supabase
       .from('eagenda_bookings')
       .select('*')
-      .eq('conciliation_status', 'PENDING')
+      .eq('conciliation_status', 'MATCHED')
       .order('start_datetime', { ascending: true });
-    if (!error && data) setPendingBookings(data.map(dbToBooking));
-    setLoadingBookings(false);
+    if (!error && data) setBoardBookings(data.map(dbToBooking));
+    setLoadingBoard(false);
   };
 
-  useEffect(() => { loadPendingBookings(); }, [currentUser]);
+  useEffect(() => { loadBoard(); }, [currentUser]);
 
   useEffect(() => {
     if (activeTab !== 'conciliation' || !currentUser) return;
-    const id = setInterval(loadPendingBookings, 30000);
+    const id = setInterval(loadBoard, 30000);
     return () => clearInterval(id);
   }, [activeTab, currentUser]);
 
@@ -607,60 +606,6 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
     [clients]
   );
 
-  // Confirma que o agendamento é de um cliente: grava o dia, aprende o vínculo
-  // (person_key -> client) e tira o item da fila.
-  const confirmConciliation = async (booking: EagendaBooking, clientId: string) => {
-    if (!clientId) return;
-    setProcessingBooking(booking.appointmentKey);
-    try {
-      // 1) Aprende o vínculo para as próximas vezes caírem automáticas.
-      if (booking.personKey) {
-        await supabase.from('eagenda_client_links').upsert(
-          {
-            person_key: booking.personKey,
-            client_id: clientId,
-            linked_name: booking.attendeeName,
-          },
-          { onConflict: 'person_key' }
-        );
-      }
-
-      // 2) Preenche a data da reunião (mantém o status atual — "só a data").
-      await updateMeetingData(clientId, booking.monthKey, { customDate: booking.dayOfMonth });
-
-      // 3) Marca o agendamento como conciliado.
-      const { error } = await supabase
-        .from('eagenda_bookings')
-        .update({ conciliation_status: 'MATCHED', matched_client_id: clientId })
-        .eq('appointment_key', booking.appointmentKey);
-      if (error) throw error;
-
-      // 4) Remove da fila local.
-      setPendingBookings(prev => prev.filter(b => b.appointmentKey !== booking.appointmentKey));
-    } catch (e: any) {
-      alert(`Erro ao conciliar: ${e?.message ?? e}`);
-    } finally {
-      setProcessingBooking(null);
-    }
-  };
-
-  // Marca como "não é cliente / ignorar": sai da fila sem preencher nada.
-  const ignoreBooking = async (booking: EagendaBooking) => {
-    setProcessingBooking(booking.appointmentKey);
-    try {
-      const { error } = await supabase
-        .from('eagenda_bookings')
-        .update({ conciliation_status: 'IGNORED' })
-        .eq('appointment_key', booking.appointmentKey);
-      if (error) throw error;
-      setPendingBookings(prev => prev.filter(b => b.appointmentKey !== booking.appointmentKey));
-    } catch (e: any) {
-      alert(`Erro ao ignorar: ${e?.message ?? e}`);
-    } finally {
-      setProcessingBooking(null);
-    }
-  };
-
   // Recarrega os clientes do banco (usado após a importação preencher datas).
   const reloadClients = async () => {
     const { data, error } = await supabase
@@ -671,8 +616,9 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
     if (!error && data) setClients(data.map(dbToClient));
   };
 
-  // Importa os agendamentos já existentes no eAgenda (casa por telefone com
-  // ativos, preenche datas e aprende vínculos). Roda a Edge Function.
+  // Importa (uma vez) os agendamentos já existentes no eAgenda: casa por
+  // telefone/nome só com clientes ATIVOS e preenche as datas. Não cria pendência
+  // de quem não é ativo. No dia a dia o webhook faz isso sozinho.
   const runImport = async () => {
     if (!confirm(`Importar agendamentos do eAgenda numa janela de ±${importWindow} dias? Só clientes ativos do sistema serão conciliados.`)) return;
     setImporting(true);
@@ -682,13 +628,12 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
       });
       if (error) throw error;
       const s = data?.summary;
-      await Promise.all([loadPendingBookings(), reloadClients()]);
+      await Promise.all([loadBoard(), reloadClients()]);
       if (s) {
         alert(
           `Importação concluída (janela ±${importWindow} dias)!\n\n` +
           `• ${s.autoMatched} clientes ativos conciliados (data preenchida)\n` +
-          `• ${s.notFound} agendaram mas não estão cadastrados ("não achei")\n` +
-          `• ${s.skippedInactive} ignorados (cliente encerrado)\n\n` +
+          `• ${s.notFound} agendamentos ignorados (não são clientes ativos)\n\n` +
           `${s.activeClients} clientes ativos no sistema · ${s.inWindow} agendamentos na janela`
         );
       } else {
@@ -701,31 +646,12 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
     }
   };
 
-  // Conciliações já feitas (para poder corrigir um match errado).
-  const loadMatchedBookings = async () => {
-    setLoadingMatched(true);
-    const { data, error } = await supabase
-      .from('eagenda_bookings')
-      .select('*')
-      .eq('conciliation_status', 'MATCHED')
-      .order('start_datetime', { ascending: false })
-      .limit(200);
-    if (!error && data) setMatchedBookings(data.map(dbToBooking));
-    setLoadingMatched(false);
-  };
-
-  const toggleMatched = () => {
-    const next = !showMatched;
-    setShowMatched(next);
-    if (next) loadMatchedBookings();
-  };
-
-  // Corrige um match: tira a data do cliente antigo, põe no novo e atualiza o vínculo.
+  // Corrige um match errado: tira a data do cliente antigo, põe no novo e
+  // atualiza o vínculo aprendido.
   const reassignConciliation = async (booking: EagendaBooking, newClientId: string) => {
     if (!newClientId || newClientId === booking.matchedClientId) { setEditingBooking(null); return; }
     setProcessingBooking(booking.appointmentKey);
     try {
-      // 1) limpa a data do cliente antigo (se houver e não for reunião protegida)
       if (booking.matchedClientId) {
         const old = clients.find(c => c.id === booking.matchedClientId);
         const oldStatus = old?.statusByMonth?.[booking.monthKey]?.status;
@@ -733,22 +659,19 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
           await updateMeetingData(booking.matchedClientId, booking.monthKey, { customDate: undefined });
         }
       }
-      // 2) preenche a data no cliente novo
       await updateMeetingData(newClientId, booking.monthKey, { customDate: booking.dayOfMonth });
-      // 3) atualiza o vínculo aprendido
       if (booking.personKey) {
         await supabase.from('eagenda_client_links').upsert(
           { person_key: booking.personKey, client_id: newClientId, linked_name: booking.attendeeName },
           { onConflict: 'person_key' }
         );
       }
-      // 4) atualiza o registro do agendamento
       const { error } = await supabase
         .from('eagenda_bookings')
         .update({ matched_client_id: newClientId })
         .eq('appointment_key', booking.appointmentKey);
       if (error) throw error;
-      setMatchedBookings(prev => prev.map(b =>
+      setBoardBookings(prev => prev.map(b =>
         b.appointmentKey === booking.appointmentKey ? { ...b, matchedClientId: newClientId } : b
       ));
       setEditingBooking(null);
@@ -758,6 +681,38 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
       setProcessingBooking(null);
     }
   };
+
+  // Cruza os clientes ativos com os agendamentos conciliados do eAgenda.
+  // Cada ativo vira uma linha: com a data (conciliado) ou "sem agendamento".
+  const conciliationRows = useMemo(() => {
+    const byClient = new Map<string, EagendaBooking>();
+    boardBookings.forEach(b => {
+      if (!b.matchedClientId) return;
+      const cur = byClient.get(b.matchedClientId);
+      // fica com o agendamento mais recente por cliente
+      if (!cur || b.startDateTime > cur.startDateTime) byClient.set(b.matchedClientId, b);
+    });
+    const term = normalizeName(conciliationSearch);
+    return activeClients
+      .filter(c => !term || normalizeName(c.name).includes(term) || (c.phoneDigits ?? '').includes(conciliationSearch.replace(/\D/g, '')))
+      .map(c => ({ client: c, booking: byClient.get(c.id) ?? null }))
+      .filter(row => {
+        if (conciliationFilter === 'done') return !!row.booking;
+        if (conciliationFilter === 'pending') return !row.booking;
+        return true;
+      })
+      .sort((a, b) => {
+        // sem agendamento primeiro, depois por nome
+        const ap = a.booking ? 1 : 0, bp = b.booking ? 1 : 0;
+        if (ap !== bp) return ap - bp;
+        return a.client.name.localeCompare(b.client.name);
+      });
+  }, [activeClients, boardBookings, conciliationSearch, conciliationFilter]);
+
+  const conciliationStats = useMemo(() => {
+    const done = new Set(boardBookings.filter(b => b.matchedClientId).map(b => b.matchedClientId)).size;
+    return { done, total: activeClients.length, pending: activeClients.length - done };
+  }, [activeClients, boardBookings]);
 
   const addMoreMonth = () => {
     const last = visibleMonths[visibleMonths.length - 1];
@@ -1101,9 +1056,9 @@ const billingData = useMemo(() => {
           <button onClick={() => setActiveTab('history')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'history' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Histórico</button>
           <button onClick={() => setActiveTab('conciliation')} className={`relative py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'conciliation' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>
             Conciliação
-            {pendingBookings.length > 0 && (
-              <span className="absolute -top-0.5 -right-3 min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold">
-                {pendingBookings.length}
+            {conciliationStats.pending > 0 && (
+              <span className="absolute -top-0.5 -right-3 min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-full bg-yellow-500 text-white text-[10px] font-bold">
+                {conciliationStats.pending}
               </span>
             )}
           </button>
@@ -2417,8 +2372,8 @@ const billingData = useMemo(() => {
                   Conciliação do eAgenda
                 </h2>
                 <p className="text-sm text-slate-500 mt-1">
-                  Agendamentos que não casaram automaticamente. Confirme o cliente uma vez —
-                  as próximas reuniões da mesma pessoa entram sozinhas.
+                  Seus clientes ativos cruzados com o eAgenda. Quem agenda entra sozinho.
+                  Use "Importar" só uma vez para acertar a base atual.
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -2448,180 +2403,127 @@ const billingData = useMemo(() => {
                   </>
                 )}
                 <button
-                  onClick={loadPendingBookings}
+                  onClick={loadBoard}
                   className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-sm font-semibold transition-colors"
                 >
-                  <RefreshCw className={`w-4 h-4 ${loadingBookings ? 'animate-spin' : ''}`} />
+                  <RefreshCw className={`w-4 h-4 ${loadingBoard ? 'animate-spin' : ''}`} />
                   Atualizar
                 </button>
               </div>
             </div>
 
-            {loadingBookings && pendingBookings.length === 0 ? (
-              <div className="text-center py-16 text-slate-400 text-sm">Carregando…</div>
-            ) : pendingBookings.length === 0 ? (
-              <div className="text-center py-16 bg-white rounded-xl border border-slate-100">
-                <CheckCircle2 className="w-10 h-10 text-green-400 mx-auto mb-3" />
-                <p className="text-slate-600 font-semibold">Tudo conciliado!</p>
-                <p className="text-slate-400 text-sm mt-1">
-                  Nenhum agendamento aguardando. Novos agendamentos aparecem aqui automaticamente.
-                </p>
+            {/* Resumo + filtros */}
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-2 text-sm">
+                <span className="px-3 py-1 rounded-full bg-green-100 text-green-700 font-bold">{conciliationStats.done} conciliados</span>
+                <span className="px-3 py-1 rounded-full bg-yellow-100 text-yellow-700 font-bold">{conciliationStats.pending} sem agendamento</span>
+                <span className="px-3 py-1 rounded-full bg-slate-100 text-slate-600 font-semibold">{conciliationStats.total} ativos</span>
               </div>
-            ) : (
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                {pendingBookings.map(booking => {
-                  const suggestions = [...activeClients].sort(
-                    (a, b) => nameScore(booking.attendeeName ?? '', b.name) - nameScore(booking.attendeeName ?? '', a.name)
-                  );
-                  const topId = suggestions[0]?.id ?? '';
-                  const selectedId = conciliationSelections[booking.appointmentKey] ?? topId;
-                  const startDate = new Date(booking.startDateTime);
-                  const dateLabel = isNaN(startDate.getTime())
-                    ? `${String(booking.dayOfMonth).padStart(2, '0')}/${booking.monthKey.split('-')[1]}/${booking.monthKey.split('-')[0]}`
-                    : startDate.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
-                  const timeLabel = isNaN(startDate.getTime())
-                    ? ''
-                    : startDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-                  const busy = processingBooking === booking.appointmentKey;
-
-                  return (
-                    <div key={booking.appointmentKey} className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-lg font-bold text-slate-800">{booking.attendeeName || 'Sem nome'}</p>
-                          {booking.attendeeEmail && (
-                            <p className="text-xs text-slate-400">{booking.attendeeEmail}</p>
-                          )}
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm font-bold text-yellow-600">{dateLabel}</p>
-                          {timeLabel && <p className="text-xs text-slate-400">{timeLabel}</p>}
-                        </div>
-                      </div>
-
-                      <div className="mt-4">
-                        <label className="text-[11px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1">
-                          <Link2 className="w-3.5 h-3.5" /> Vincular ao cliente
-                        </label>
-                        <select
-                          value={selectedId}
-                          onChange={e =>
-                            setConciliationSelections(prev => ({ ...prev, [booking.appointmentKey]: e.target.value }))
-                          }
-                          className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-yellow-400"
-                        >
-                          <option value="">— Selecione um cliente ativo —</option>
-                          {suggestions.map(c => (
-                            <option key={c.id} value={c.id}>
-                              {c.name} ({c.phoneDigits})
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="mt-4 flex items-center gap-2">
-                        <button
-                          disabled={busy || !selectedId}
-                          onClick={() => confirmConciliation(booking, selectedId)}
-                          className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-green-500 hover:bg-green-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-bold transition-colors"
-                        >
-                          <CheckCircle2 className="w-4 h-4" />
-                          {busy ? 'Salvando…' : 'Confirmar e preencher data'}
-                        </button>
-                        <button
-                          disabled={busy}
-                          onClick={() => ignoreBooking(booking)}
-                          className="px-4 py-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-500 text-sm font-semibold transition-colors"
-                        >
-                          Ignorar
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+              <div className="flex items-center gap-2">
+                <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-semibold">
+                  {([['all','Todos'],['pending','Sem agendamento'],['done','Conciliados']] as const).map(([val, label]) => (
+                    <button
+                      key={val}
+                      onClick={() => setConciliationFilter(val)}
+                      className={`px-3 py-2 transition-colors ${conciliationFilter === val ? 'bg-yellow-500 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div className="relative">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    value={conciliationSearch}
+                    onChange={e => setConciliationSearch(e.target.value)}
+                    placeholder="Buscar cliente…"
+                    className="pl-9 pr-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400"
+                  />
+                </div>
               </div>
-            )}
+            </div>
 
-            {/* Conciliados (para corrigir um match errado) */}
-            <div className="pt-2">
-              <button
-                onClick={toggleMatched}
-                className="text-sm font-semibold text-slate-500 hover:text-slate-700 flex items-center gap-2"
-              >
-                <Pencil className="w-4 h-4" />
-                {showMatched ? 'Ocultar conciliados' : 'Ver conciliados (corrigir um match errado)'}
-              </button>
+            {/* Placar: SISTEMA (ativos) × eAGENDA */}
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <div className="grid grid-cols-2 bg-slate-50 border-b border-slate-200 text-[11px] font-black uppercase tracking-widest text-slate-500">
+                <div className="px-4 py-3 border-r border-slate-200 bg-yellow-50">Sistema ({conciliationStats.total} ativos)</div>
+                <div className="px-4 py-3">eAgenda</div>
+              </div>
 
-              {showMatched && (
-                <div className="mt-4">
-                  {loadingMatched ? (
-                    <div className="text-center py-8 text-slate-400 text-sm">Carregando…</div>
-                  ) : matchedBookings.length === 0 ? (
-                    <div className="text-center py-8 text-slate-400 text-sm">Nenhuma conciliação ainda.</div>
-                  ) : (
-                    <div className="bg-white rounded-xl border border-slate-100 divide-y divide-slate-100">
-                      {matchedBookings.map(booking => {
-                        const matchedClient = clients.find(c => c.id === booking.matchedClientId);
-                        const startDate = new Date(booking.startDateTime);
-                        const dateLabel = isNaN(startDate.getTime())
-                          ? `${String(booking.dayOfMonth).padStart(2, '0')}/${booking.monthKey.split('-')[1]}`
-                          : startDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-                        const isEditing = editingBooking === booking.appointmentKey;
-                        const selectedId = conciliationSelections[booking.appointmentKey] ?? (booking.matchedClientId ?? '');
-                        const busy = processingBooking === booking.appointmentKey;
-                        return (
-                          <div key={booking.appointmentKey} className="p-4">
-                            <div className="flex items-center justify-between gap-3 flex-wrap">
+              {loadingBoard && boardBookings.length === 0 ? (
+                <div className="text-center py-16 text-slate-400 text-sm">Carregando…</div>
+              ) : conciliationRows.length === 0 ? (
+                <div className="text-center py-16 text-slate-400 text-sm">Nenhum cliente ativo encontrado.</div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {conciliationRows.map(({ client, booking }) => {
+                    const isEditing = editingBooking === client.id;
+                    const selectedId = conciliationSelections[client.id] ?? client.id;
+                    const busy = booking ? processingBooking === booking.appointmentKey : false;
+                    const dateLabel = booking
+                      ? `${String(booking.dayOfMonth).padStart(2, '0')}/${booking.monthKey.split('-')[1]}/${booking.monthKey.split('-')[0]}`
+                      : null;
+                    return (
+                      <div key={client.id} className="grid grid-cols-2">
+                        {/* Lado SISTEMA */}
+                        <div className={`px-4 py-3 border-r border-slate-100 ${booking ? 'bg-yellow-50/40' : 'bg-yellow-50'}`}>
+                          <p className="text-sm font-bold text-slate-800">{client.name}</p>
+                          <p className="text-xs text-slate-400">{client.phoneDigits}</p>
+                        </div>
+
+                        {/* Lado eAGENDA */}
+                        <div className="px-4 py-3">
+                          {booking ? (
+                            <div className="flex items-start justify-between gap-2">
                               <div className="min-w-0">
-                                <p className="text-sm font-bold text-slate-800 truncate">
-                                  {booking.attendeeName || 'Sem nome'}
-                                  <span className="text-slate-400 font-normal"> → </span>
-                                  <span className="text-green-600">{matchedClient?.name ?? '(cliente removido)'}</span>
+                                <p className="text-sm font-bold text-green-600 flex items-center gap-1">
+                                  <CheckCircle2 className="w-4 h-4 shrink-0" /> {dateLabel}
                                 </p>
-                                <p className="text-xs text-slate-400">Agendou {dateLabel}</p>
+                                <p className="text-xs text-slate-400 truncate">{booking.attendeeName}</p>
                               </div>
                               {!isEditing && (
                                 <button
-                                  onClick={() => { setEditingBooking(booking.appointmentKey); setConciliationSelections(prev => ({ ...prev, [booking.appointmentKey]: booking.matchedClientId ?? '' })); }}
-                                  className="text-xs font-semibold text-yellow-600 hover:text-yellow-700 flex items-center gap-1"
+                                  onClick={() => { setEditingBooking(client.id); setConciliationSelections(prev => ({ ...prev, [client.id]: client.id })); }}
+                                  className="text-xs font-semibold text-slate-400 hover:text-yellow-600 flex items-center gap-1 shrink-0"
                                 >
                                   <Pencil className="w-3.5 h-3.5" /> Corrigir
                                 </button>
                               )}
                             </div>
+                          ) : (
+                            <p className="text-sm text-slate-300 italic">— sem agendamento —</p>
+                          )}
 
-                            {isEditing && (
-                              <div className="mt-3 flex items-center gap-2 flex-wrap">
-                                <select
-                                  value={selectedId}
-                                  onChange={e => setConciliationSelections(prev => ({ ...prev, [booking.appointmentKey]: e.target.value }))}
-                                  className="flex-1 min-w-[200px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-yellow-400"
-                                >
-                                  {activeClients.map(c => (
-                                    <option key={c.id} value={c.id}>{c.name} ({c.phoneDigits})</option>
-                                  ))}
-                                </select>
-                                <button
-                                  disabled={busy}
-                                  onClick={() => reassignConciliation(booking, selectedId)}
-                                  className="px-3 py-2 rounded-lg bg-green-500 hover:bg-green-600 disabled:opacity-40 text-white text-xs font-bold transition-colors"
-                                >
-                                  {busy ? 'Salvando…' : 'Salvar'}
-                                </button>
-                                <button
-                                  disabled={busy}
-                                  onClick={() => setEditingBooking(null)}
-                                  className="px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-500 text-xs font-semibold transition-colors"
-                                >
-                                  Cancelar
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                          {isEditing && booking && (
+                            <div className="mt-2 flex items-center gap-2 flex-wrap">
+                              <select
+                                value={selectedId}
+                                onChange={e => setConciliationSelections(prev => ({ ...prev, [client.id]: e.target.value }))}
+                                className="flex-1 min-w-[180px] rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-yellow-400"
+                              >
+                                {activeClients.map(c => (
+                                  <option key={c.id} value={c.id}>{c.name} ({c.phoneDigits})</option>
+                                ))}
+                              </select>
+                              <button
+                                disabled={busy}
+                                onClick={() => reassignConciliation(booking, selectedId)}
+                                className="px-3 py-1.5 rounded-lg bg-green-500 hover:bg-green-600 disabled:opacity-40 text-white text-xs font-bold"
+                              >
+                                {busy ? '…' : 'Salvar'}
+                              </button>
+                              <button
+                                onClick={() => setEditingBooking(null)}
+                                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-500 text-xs font-semibold"
+                              >
+                                Cancelar
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

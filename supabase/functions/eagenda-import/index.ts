@@ -133,7 +133,6 @@ Deno.serve(async (req: Request) => {
     totalFromApi: appointments.length, inWindow: 0,
     autoMatched: 0, notFound: 0, skippedInactive: 0, skippedStatus: 0, outOfWindow: 0, invalid: 0,
   };
-  const notFoundList: Array<{ name: string | null; phone: string | null; date: string }> = [];
 
   for (const appt of appointments) {
     const appointmentKey = appt?.appointment_key;
@@ -186,6 +185,11 @@ Deno.serve(async (req: Request) => {
     };
 
     if (clientId) {
+      // Não mexe no que já foi conciliado/ignorado manualmente antes.
+      const { data: prev } = await supabase
+        .from("eagenda_bookings").select("conciliation_status").eq("appointment_key", appointmentKey).maybeSingle();
+      if (prev?.conciliation_status === "IGNORED") { summary.skippedStatus++; continue; }
+
       if (personKey && !linkByPerson.has(personKey)) {
         await supabase.from("eagenda_client_links").upsert({ person_key: personKey, client_id: clientId, linked_name: name }, { onConflict: "person_key" });
         linkByPerson.set(personKey, clientId);
@@ -194,12 +198,10 @@ Deno.serve(async (req: Request) => {
       await supabase.from("eagenda_bookings").upsert({ ...base, conciliation_status: "MATCHED", matched_client_id: clientId }, { onConflict: "appointment_key" });
       summary.autoMatched++;
     } else {
-      // "não achei": agendou na janela mas não é nenhum dos ativos cadastrados.
-      await supabase.from("eagenda_bookings").upsert({ ...base, conciliation_status: "PENDING", matched_client_id: null }, { onConflict: "appointment_key" });
+      // Não é cliente ativo -> só conta, NÃO cria pendência (só nos importam os ativos).
       summary.notFound++;
-      if (notFoundList.length < 100) notFoundList.push({ name, phone: phone || null, date: day });
     }
   }
 
-  return json({ ok: true, summary, notFoundList });
+  return json({ ok: true, summary });
 });
