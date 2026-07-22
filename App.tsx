@@ -146,6 +146,7 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
   const [importing, setImporting] = useState(false);
   const [importWindow, setImportWindow] = useState<number>(45);
   const [editingBooking, setEditingBooking] = useState<string | null>(null);
+  const [manualClientId, setManualClientId] = useState<string | null>(null);
   const [conciliationFilter, setConciliationFilter] = useState<'all' | 'pending' | 'done'>('all');
   const [conciliationSearch, setConciliationSearch] = useState('');
   const [billingMonthOverrides, setBillingMonthOverrides] = useState<Record<string, string>>(() => {
@@ -210,7 +211,7 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
     const { data, error } = await supabase
       .from('eagenda_bookings')
       .select('*')
-      .eq('conciliation_status', 'MATCHED')
+      .in('conciliation_status', ['MATCHED', 'PENDING'])
       .order('start_datetime', { ascending: true });
     if (!error && data) setBoardBookings(data.map(dbToBooking));
     setLoadingBoard(false);
@@ -713,6 +714,50 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
     const done = new Set(boardBookings.filter(b => b.matchedClientId).map(b => b.matchedClientId)).size;
     return { done, total: activeClients.length, pending: activeClients.length - done };
   }, [activeClients, boardBookings]);
+
+  // Candidatos = agendamentos do eAgenda que não casaram automaticamente.
+  // Não viram linha; alimentam o seletor manual de cada cliente "sem agendamento".
+  const candidates = useMemo(
+    () => boardBookings.filter(b => b.conciliationStatus === 'PENDING' && !b.matchedClientId),
+    [boardBookings]
+  );
+
+  // Ordena os candidatos por semelhança de nome com o cliente (melhor sugestão 1º).
+  const candidatesFor = (client: Client) =>
+    [...candidates].sort((a, b) => nameScore(client.name, b.attendeeName ?? '') - nameScore(client.name, a.attendeeName ?? ''));
+
+  // Concilia manualmente um cliente "sem agendamento" com um agendamento do
+  // eAgenda escolhido. Vincula também os outros agendamentos da mesma pessoa.
+  const manualConcile = async (client: Client, appointmentKey: string) => {
+    const chosen = candidates.find(c => c.appointmentKey === appointmentKey);
+    if (!chosen) return;
+    setProcessingBooking(appointmentKey);
+    try {
+      // agrupa todos os agendamentos da mesma pessoa (se tiver person_key)
+      const group = chosen.personKey
+        ? candidates.filter(c => c.personKey === chosen.personKey)
+        : [chosen];
+
+      for (const b of group) {
+        await updateMeetingData(client.id, b.monthKey, { customDate: b.dayOfMonth });
+        await supabase.from('eagenda_bookings')
+          .update({ conciliation_status: 'MATCHED', matched_client_id: client.id })
+          .eq('appointment_key', b.appointmentKey);
+      }
+      if (chosen.personKey) {
+        await supabase.from('eagenda_client_links').upsert(
+          { person_key: chosen.personKey, client_id: client.id, linked_name: chosen.attendeeName },
+          { onConflict: 'person_key' }
+        );
+      }
+      setManualClientId(null);
+      await loadBoard();
+    } catch (e: any) {
+      alert(`Erro ao conciliar: ${e?.message ?? e}`);
+    } finally {
+      setProcessingBooking(null);
+    }
+  };
 
   const addMoreMonth = () => {
     const last = visibleMonths[visibleMonths.length - 1];
@@ -2491,8 +2536,62 @@ const billingData = useMemo(() => {
                               )}
                             </div>
                           ) : (
-                            <p className="text-sm text-slate-300 italic">— sem agendamento —</p>
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-sm text-slate-300 italic">— sem agendamento —</p>
+                              {manualClientId !== client.id && (
+                                <button
+                                  onClick={() => {
+                                    const best = candidatesFor(client)[0];
+                                    setManualClientId(client.id);
+                                    setConciliationSelections(prev => ({ ...prev, [client.id]: best?.appointmentKey ?? '' }));
+                                  }}
+                                  className="text-xs font-semibold text-yellow-600 hover:text-yellow-700 flex items-center gap-1 shrink-0"
+                                >
+                                  <Link2 className="w-3.5 h-3.5" /> Conciliar
+                                </button>
+                              )}
+                            </div>
                           )}
+
+                          {manualClientId === client.id && !booking && (() => {
+                            const opts = candidatesFor(client);
+                            const chosenKey = conciliationSelections[client.id] ?? opts[0]?.appointmentKey ?? '';
+                            const chosenBusy = processingBooking === chosenKey;
+                            return (
+                              <div className="mt-2">
+                                {opts.length === 0 ? (
+                                  <p className="text-xs text-slate-400">Nenhum agendamento na janela pra sugerir. Rode "Importar" ou amplie os dias.</p>
+                                ) : (
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <select
+                                      value={chosenKey}
+                                      onChange={e => setConciliationSelections(prev => ({ ...prev, [client.id]: e.target.value }))}
+                                      className="flex-1 min-w-[200px] rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-yellow-400"
+                                    >
+                                      {opts.map((c, i) => (
+                                        <option key={c.appointmentKey} value={c.appointmentKey}>
+                                          {i === 0 ? '⭐ ' : ''}{c.attendeeName ?? 'Sem nome'} · {String(c.dayOfMonth).padStart(2, '0')}/{c.monthKey.split('-')[1]}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <button
+                                      disabled={chosenBusy || !chosenKey}
+                                      onClick={() => manualConcile(client, chosenKey)}
+                                      className="px-3 py-1.5 rounded-lg bg-green-500 hover:bg-green-600 disabled:opacity-40 text-white text-xs font-bold"
+                                    >
+                                      {chosenBusy ? '…' : 'Vincular'}
+                                    </button>
+                                    <button
+                                      onClick={() => setManualClientId(null)}
+                                      className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-500 text-xs font-semibold"
+                                    >
+                                      Cancelar
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
 
                           {isEditing && booking && (
                             <div className="mt-2 flex items-center gap-2 flex-wrap">

@@ -198,7 +198,13 @@ Deno.serve(async (req: Request) => {
       await supabase.from("eagenda_bookings").upsert({ ...base, conciliation_status: "MATCHED", matched_client_id: clientId }, { onConflict: "appointment_key" });
       summary.autoMatched++;
     } else {
-      // Não é cliente ativo -> só conta, NÃO cria pendência (só nos importam os ativos).
+      // Não casou automaticamente -> guarda como CANDIDATO (PENDING). Não vira
+      // linha no painel; serve de sugestão no seletor manual do cliente "sem
+      // agendamento". Não sobrescreve o que já foi conciliado/ignorado.
+      const { data: prev } = await supabase
+        .from("eagenda_bookings").select("conciliation_status").eq("appointment_key", appointmentKey).maybeSingle();
+      if (prev?.conciliation_status === "MATCHED" || prev?.conciliation_status === "IGNORED") { summary.skippedStatus++; continue; }
+      await supabase.from("eagenda_bookings").upsert({ ...base, conciliation_status: "PENDING", matched_client_id: null }, { onConflict: "appointment_key" });
       summary.notFound++;
     }
   }
