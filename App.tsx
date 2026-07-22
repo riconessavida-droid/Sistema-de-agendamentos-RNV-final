@@ -144,6 +144,7 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
   const [conciliationSelections, setConciliationSelections] = useState<Record<string, string>>({});
   const [processingBooking, setProcessingBooking] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [importWindow, setImportWindow] = useState<number>(45);
   const [matchedBookings, setMatchedBookings] = useState<EagendaBooking[]>([]);
   const [showMatched, setShowMatched] = useState(false);
   const [loadingMatched, setLoadingMatched] = useState(false);
@@ -673,20 +674,22 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
   // Importa os agendamentos já existentes no eAgenda (casa por telefone com
   // ativos, preenche datas e aprende vínculos). Roda a Edge Function.
   const runImport = async () => {
-    if (!confirm('Importar os agendamentos existentes do eAgenda? Só clientes ativos serão conciliados.')) return;
+    if (!confirm(`Importar agendamentos do eAgenda numa janela de ±${importWindow} dias? Só clientes ativos do sistema serão conciliados.`)) return;
     setImporting(true);
     try {
-      const { data, error } = await supabase.functions.invoke('eagenda-import');
+      const { data, error } = await supabase.functions.invoke('eagenda-import', {
+        body: { daysBack: importWindow, daysForward: importWindow },
+      });
       if (error) throw error;
       const s = data?.summary;
       await Promise.all([loadPendingBookings(), reloadClients()]);
       if (s) {
         alert(
-          `Importação concluída!\n\n` +
-          `• ${s.autoMatched} preenchidos automaticamente (telefone bateu)\n` +
-          `• ${s.queued} aguardando conciliação manual\n` +
-          `• ${s.skippedInactive} ignorados (cliente encerrado)\n` +
-          `• ${s.total} agendamentos lidos no eAgenda`
+          `Importação concluída (janela ±${importWindow} dias)!\n\n` +
+          `• ${s.autoMatched} clientes ativos conciliados (data preenchida)\n` +
+          `• ${s.notFound} agendaram mas não estão cadastrados ("não achei")\n` +
+          `• ${s.skippedInactive} ignorados (cliente encerrado)\n\n` +
+          `${s.activeClients} clientes ativos no sistema · ${s.inWindow} agendamentos na janela`
         );
       } else {
         alert('Importação concluída.');
@@ -2420,14 +2423,29 @@ const billingData = useMemo(() => {
               </div>
               <div className="flex items-center gap-2">
                 {currentUser.role === UserRole.ADMIN && (
-                  <button
-                    onClick={runImport}
-                    disabled={importing}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-yellow-500 hover:bg-yellow-600 disabled:opacity-50 text-white text-sm font-bold transition-colors"
-                  >
-                    <DownloadCloud className={`w-4 h-4 ${importing ? 'animate-pulse' : ''}`} />
-                    {importing ? 'Importando…' : 'Importar do eAgenda'}
-                  </button>
+                  <>
+                    <select
+                      value={importWindow}
+                      onChange={e => setImportWindow(Number(e.target.value))}
+                      disabled={importing}
+                      title="Janela de dias para trás e para frente"
+                      className="rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-yellow-400"
+                    >
+                      <option value={15}>±15 dias</option>
+                      <option value={30}>±30 dias</option>
+                      <option value={45}>±45 dias</option>
+                      <option value={60}>±60 dias</option>
+                      <option value={90}>±90 dias</option>
+                    </select>
+                    <button
+                      onClick={runImport}
+                      disabled={importing}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg bg-yellow-500 hover:bg-yellow-600 disabled:opacity-50 text-white text-sm font-bold transition-colors"
+                    >
+                      <DownloadCloud className={`w-4 h-4 ${importing ? 'animate-pulse' : ''}`} />
+                      {importing ? 'Importando…' : 'Importar do eAgenda'}
+                    </button>
+                  </>
                 )}
                 <button
                   onClick={loadPendingBookings}
