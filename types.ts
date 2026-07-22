@@ -73,3 +73,20 @@ export interface BillingPeriod {
   machineRate: number;
   netValue: number;
 }
+
+// Agendamento recebido do eAgenda, aguardando (ou já feita) conciliação.
+export type ConciliationStatus = 'PENDING' | 'MATCHED' | 'IGNORED' | 'CANCELED';
+
+export interface EagendaBooking {
+  appointmentKey: string;
+  personKey: string | null;
+  attendeeName: string | null;
+  attendeeEmail: string | null;
+  startDateTime: string;   // ISO
+  monthKey: string;        // "2026-07"
+  dayOfMonth: number;      // vira o customDate
+  eventStatus: string | null;
+  conciliationStatus: ConciliationStatus;
+  matchedClientId: string | null;
+  createdAt: string;
+}

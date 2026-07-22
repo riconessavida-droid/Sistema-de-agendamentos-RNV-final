@@ -4,9 +4,10 @@ import {
   CheckCircle2, XCircle, Trash2, Pencil,
   X, LogOut, ClipboardCheck, Clock, ChevronLeft,
   AlertCircle, UserPlus, Trophy,
-  CheckSquare, Download, UserCog, Bell, FileSignature
+  CheckSquare, Download, UserCog, Bell, FileSignature,
+  CalendarClock, Link2, RefreshCw
 } from 'lucide-react';
-import { Client, MeetingStatus, User, UserRole, BillingConfig, ClientBilling, BillingPeriod } from './types';
+import { Client, MeetingStatus, User, UserRole, BillingConfig, ClientBilling, BillingPeriod, EagendaBooking } from './types';
 import {
   STATUS_OPTIONS, GROUP_COLORS, getNextMonths, getMonthLabel, MEETING_LABEL_TEXTS
 } from './constants';
@@ -17,7 +18,7 @@ import { supabase } from './supabaseClient';
 
 const SESSION_KEY = 'rnv_current_session';
 
-type TabType = 'overview' | 'checklist' | 'reports' | 'users' | 'tasks' | 'billing' | 'history';
+type TabType = 'overview' | 'checklist' | 'reports' | 'users' | 'tasks' | 'billing' | 'history' | 'conciliation';
 type ChecklistSubFilter = 'all' | 'pending' | 'not_done' | 'rescheduled';
 type StatusFilter = 'all' | 'active' | 'finalized' | 'needs_attention' | 'unsigned';
 
@@ -69,6 +70,43 @@ const clientToDb = (client: Client) => ({
   contract_value: client.contractValue ?? null
 });
 
+const dbToBooking = (row: any): EagendaBooking => ({
+  appointmentKey: row.appointment_key,
+  personKey: row.person_key ?? null,
+  attendeeName: row.attendee_name ?? null,
+  attendeeEmail: row.attendee_email ?? null,
+  startDateTime: row.start_datetime,
+  monthKey: row.month_key,
+  dayOfMonth: row.day_of_month,
+  eventStatus: row.event_status ?? null,
+  conciliationStatus: row.conciliation_status,
+  matchedClientId: row.matched_client_id ?? null,
+  createdAt: row.created_at,
+});
+
+// Normaliza nome para comparação: minúsculo, sem acento, sem espaços extras.
+const normalizeName = (s: string) =>
+  (s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+// Pontua a semelhança entre o nome do eAgenda e o nome do cliente.
+const nameScore = (eagendaName: string, clientName: string): number => {
+  const a = normalizeName(eagendaName);
+  const b = normalizeName(clientName);
+  if (!a || !b) return 0;
+  if (a === b) return 100;
+  if (b.startsWith(a) || a.startsWith(b)) return 80;
+  if (b.includes(a) || a.includes(b)) return 60;
+  const at = new Set(a.split(' '));
+  const bt = b.split(' ');
+  const overlap = bt.filter(t => at.has(t)).length;
+  return overlap * 15;
+};
+
 const toMonthKey = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 
@@ -101,6 +139,10 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
   const [draggingClientId, setDraggingClientId] = useState<string | null>(null);
   const [dragOverMonth, setDragOverMonth] = useState<string | null>(null);
   const [historySearch, setHistorySearch] = useState('');
+  const [pendingBookings, setPendingBookings] = useState<EagendaBooking[]>([]);
+  const [loadingBookings, setLoadingBookings] = useState(false);
+  const [conciliationSelections, setConciliationSelections] = useState<Record<string, string>>({});
+  const [processingBooking, setProcessingBooking] = useState<string | null>(null);
   const [billingMonthOverrides, setBillingMonthOverrides] = useState<Record<string, string>>(() => {
     try { return JSON.parse(localStorage.getItem('rnv_billing_month_overrides') || '{}'); }
     catch { return {}; }
@@ -154,6 +196,28 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
     };
     loadClients();
   }, [currentUser]);
+
+  // Fila de conciliação do eAgenda: carrega no login e atualiza a cada 30s
+  // enquanto a aba estiver aberta (mantém o padrão simples do app, sem realtime).
+  const loadPendingBookings = async () => {
+    if (!currentUser) return;
+    setLoadingBookings(true);
+    const { data, error } = await supabase
+      .from('eagenda_bookings')
+      .select('*')
+      .eq('conciliation_status', 'PENDING')
+      .order('start_datetime', { ascending: true });
+    if (!error && data) setPendingBookings(data.map(dbToBooking));
+    setLoadingBookings(false);
+  };
+
+  useEffect(() => { loadPendingBookings(); }, [currentUser]);
+
+  useEffect(() => {
+    if (activeTab !== 'conciliation' || !currentUser) return;
+    const id = setInterval(loadPendingBookings, 30000);
+    return () => clearInterval(id);
+  }, [activeTab, currentUser]);
 
   useEffect(() => {
     const loadBillingConfig = async () => {
@@ -530,7 +594,67 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
     alert(`Erro ao atualizar reunião no Supabase: ${error.message}`);
   }
 };
-  
+
+  // Só clientes ativos entram na conciliação (encerrados/cancelados não aparecem).
+  const activeClients = useMemo(
+    () => clients.filter(c => !isClientInactive(c)),
+    [clients]
+  );
+
+  // Confirma que o agendamento é de um cliente: grava o dia, aprende o vínculo
+  // (person_key -> client) e tira o item da fila.
+  const confirmConciliation = async (booking: EagendaBooking, clientId: string) => {
+    if (!clientId) return;
+    setProcessingBooking(booking.appointmentKey);
+    try {
+      // 1) Aprende o vínculo para as próximas vezes caírem automáticas.
+      if (booking.personKey) {
+        await supabase.from('eagenda_client_links').upsert(
+          {
+            person_key: booking.personKey,
+            client_id: clientId,
+            linked_name: booking.attendeeName,
+          },
+          { onConflict: 'person_key' }
+        );
+      }
+
+      // 2) Preenche a data da reunião (mantém o status atual — "só a data").
+      await updateMeetingData(clientId, booking.monthKey, { customDate: booking.dayOfMonth });
+
+      // 3) Marca o agendamento como conciliado.
+      const { error } = await supabase
+        .from('eagenda_bookings')
+        .update({ conciliation_status: 'MATCHED', matched_client_id: clientId })
+        .eq('appointment_key', booking.appointmentKey);
+      if (error) throw error;
+
+      // 4) Remove da fila local.
+      setPendingBookings(prev => prev.filter(b => b.appointmentKey !== booking.appointmentKey));
+    } catch (e: any) {
+      alert(`Erro ao conciliar: ${e?.message ?? e}`);
+    } finally {
+      setProcessingBooking(null);
+    }
+  };
+
+  // Marca como "não é cliente / ignorar": sai da fila sem preencher nada.
+  const ignoreBooking = async (booking: EagendaBooking) => {
+    setProcessingBooking(booking.appointmentKey);
+    try {
+      const { error } = await supabase
+        .from('eagenda_bookings')
+        .update({ conciliation_status: 'IGNORED' })
+        .eq('appointment_key', booking.appointmentKey);
+      if (error) throw error;
+      setPendingBookings(prev => prev.filter(b => b.appointmentKey !== booking.appointmentKey));
+    } catch (e: any) {
+      alert(`Erro ao ignorar: ${e?.message ?? e}`);
+    } finally {
+      setProcessingBooking(null);
+    }
+  };
+
   const addMoreMonth = () => {
     const last = visibleMonths[visibleMonths.length - 1];
     const next = getNextMonths(last, 2)[1];
@@ -871,6 +995,14 @@ const billingData = useMemo(() => {
           <button onClick={() => setActiveTab('checklist')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'checklist' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Checklist Mensal</button>
           <button onClick={() => setActiveTab('tasks')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'tasks' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Tarefas do Dia</button>
           <button onClick={() => setActiveTab('history')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'history' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Histórico</button>
+          <button onClick={() => setActiveTab('conciliation')} className={`relative py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'conciliation' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>
+            Conciliação
+            {pendingBookings.length > 0 && (
+              <span className="absolute -top-0.5 -right-3 min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold">
+                {pendingBookings.length}
+              </span>
+            )}
+          </button>
           {currentUser.role === UserRole.ADMIN && (
             <>
               <button onClick={() => setActiveTab('reports')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'reports' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Relatórios</button>
@@ -2170,6 +2302,116 @@ const billingData = useMemo(() => {
             </div>
           );
         })()}
+
+        {/* ===== ABA: CONCILIAÇÃO (eAgenda) ===== */}
+        {activeTab === 'conciliation' && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <h2 className="text-2xl font-black text-slate-800 flex items-center gap-2">
+                  <CalendarClock className="w-6 h-6 text-yellow-500" />
+                  Conciliação do eAgenda
+                </h2>
+                <p className="text-sm text-slate-500 mt-1">
+                  Agendamentos que não casaram automaticamente. Confirme o cliente uma vez —
+                  as próximas reuniões da mesma pessoa entram sozinhas.
+                </p>
+              </div>
+              <button
+                onClick={loadPendingBookings}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-sm font-semibold transition-colors"
+              >
+                <RefreshCw className={`w-4 h-4 ${loadingBookings ? 'animate-spin' : ''}`} />
+                Atualizar
+              </button>
+            </div>
+
+            {loadingBookings && pendingBookings.length === 0 ? (
+              <div className="text-center py-16 text-slate-400 text-sm">Carregando…</div>
+            ) : pendingBookings.length === 0 ? (
+              <div className="text-center py-16 bg-white rounded-xl border border-slate-100">
+                <CheckCircle2 className="w-10 h-10 text-green-400 mx-auto mb-3" />
+                <p className="text-slate-600 font-semibold">Tudo conciliado!</p>
+                <p className="text-slate-400 text-sm mt-1">
+                  Nenhum agendamento aguardando. Novos agendamentos aparecem aqui automaticamente.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                {pendingBookings.map(booking => {
+                  const suggestions = [...activeClients].sort(
+                    (a, b) => nameScore(booking.attendeeName ?? '', b.name) - nameScore(booking.attendeeName ?? '', a.name)
+                  );
+                  const topId = suggestions[0]?.id ?? '';
+                  const selectedId = conciliationSelections[booking.appointmentKey] ?? topId;
+                  const startDate = new Date(booking.startDateTime);
+                  const dateLabel = isNaN(startDate.getTime())
+                    ? `${String(booking.dayOfMonth).padStart(2, '0')}/${booking.monthKey.split('-')[1]}/${booking.monthKey.split('-')[0]}`
+                    : startDate.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
+                  const timeLabel = isNaN(startDate.getTime())
+                    ? ''
+                    : startDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                  const busy = processingBooking === booking.appointmentKey;
+
+                  return (
+                    <div key={booking.appointmentKey} className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-lg font-bold text-slate-800">{booking.attendeeName || 'Sem nome'}</p>
+                          {booking.attendeeEmail && (
+                            <p className="text-xs text-slate-400">{booking.attendeeEmail}</p>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-bold text-yellow-600">{dateLabel}</p>
+                          {timeLabel && <p className="text-xs text-slate-400">{timeLabel}</p>}
+                        </div>
+                      </div>
+
+                      <div className="mt-4">
+                        <label className="text-[11px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1">
+                          <Link2 className="w-3.5 h-3.5" /> Vincular ao cliente
+                        </label>
+                        <select
+                          value={selectedId}
+                          onChange={e =>
+                            setConciliationSelections(prev => ({ ...prev, [booking.appointmentKey]: e.target.value }))
+                          }
+                          className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-yellow-400"
+                        >
+                          <option value="">— Selecione um cliente ativo —</option>
+                          {suggestions.map(c => (
+                            <option key={c.id} value={c.id}>
+                              {c.name} ({c.phoneDigits})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="mt-4 flex items-center gap-2">
+                        <button
+                          disabled={busy || !selectedId}
+                          onClick={() => confirmConciliation(booking, selectedId)}
+                          className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-green-500 hover:bg-green-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-bold transition-colors"
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          {busy ? 'Salvando…' : 'Confirmar e preencher data'}
+                        </button>
+                        <button
+                          disabled={busy}
+                          onClick={() => ignoreBooking(booking)}
+                          className="px-4 py-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-500 text-sm font-semibold transition-colors"
+                        >
+                          Ignorar
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </main>
 
       {/* MODAL */}
