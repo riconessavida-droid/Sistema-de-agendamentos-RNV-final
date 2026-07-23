@@ -103,7 +103,10 @@ Deno.serve(async (req: Request) => {
     const sbm = c.status_by_month ?? {};
     const current = sbm[monthKey] ?? {};
     if (PROTECTED_STATUSES.has(current.status ?? "") && current.customDate != null) return true;
-    const nextSbm = { ...sbm, [monthKey]: { ...current, customDate: day, status: current.status ?? "PENDING" } };
+    // Regra: dentro do mês vale a ÚLTIMA data (maior dia). Nunca rebaixa.
+    const curDay = typeof current.customDate === "number" ? current.customDate : null;
+    const finalDay = (curDay != null && curDay > day) ? curDay : day;
+    const nextSbm = { ...sbm, [monthKey]: { ...current, customDate: finalDay, status: current.status ?? "PENDING" } };
     const { error } = await supabase.from("clients").update({ status_by_month: nextSbm }).eq("id", clientId);
     if (!error) c.status_by_month = nextSbm;
     return !error;

@@ -73,7 +73,13 @@ Deno.serve(async (req: Request) => {
     const sbm: Record<string, any> = client.status_by_month ?? {};
     const current = sbm[monthKey] ?? {};
     if (day === null && PROTECTED_STATUSES.has(current.status ?? "")) return true;
-    const nextSbm = { ...sbm, [monthKey]: { ...current, customDate: day, status: current.status ?? "PENDING" } };
+    // Regra: dentro do mês vale a ÚLTIMA data (maior dia). Nunca rebaixa.
+    let finalDay = day;
+    if (day !== null) {
+      const curDay = typeof current.customDate === "number" ? current.customDate : null;
+      finalDay = (curDay != null && curDay > day) ? curDay : day;
+    }
+    const nextSbm = { ...sbm, [monthKey]: { ...current, customDate: finalDay, status: current.status ?? "PENDING" } };
     const { error: upErr } = await supabase.from("clients").update({ status_by_month: nextSbm }).eq("id", clientId);
     return !upErr;
   }
@@ -81,11 +87,18 @@ Deno.serve(async (req: Request) => {
   // ---- CANCELAMENTO ----
   if (isCancel) {
     const { data: existing } = await supabase
-      .from("eagenda_bookings").select("matched_client_id, month_key")
+      .from("eagenda_bookings").select("matched_client_id, month_key, day_of_month")
       .eq("appointment_key", appointmentKey).maybeSingle();
     const clientId = existing?.matched_client_id ?? null;
     const monthKey = existing?.month_key ?? parsed?.monthKey ?? null;
-    if (clientId && monthKey) await applyToClient(clientId, monthKey, null);
+    const canceledDay = existing?.day_of_month ?? parsed?.day ?? null;
+    // Só limpa a data do cliente se ela for justamente a do agendamento
+    // cancelado (assim cancelar o 22 não apaga um 29 remarcado).
+    if (clientId && monthKey && canceledDay != null) {
+      const { data: c } = await supabase.from("clients").select("status_by_month").eq("id", clientId).single();
+      const cur = c?.status_by_month?.[monthKey];
+      if (cur?.customDate === canceledDay) await applyToClient(clientId, monthKey, null);
+    }
     await supabase.from("eagenda_bookings")
       .update({ conciliation_status: "CANCELED", event_status: "CANCELED", raw: payload })
       .eq("appointment_key", appointmentKey);

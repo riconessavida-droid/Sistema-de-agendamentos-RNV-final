@@ -1530,10 +1530,12 @@ const billingData = useMemo(() => {
         const diffMs = nextMeeting.getTime() - today.getTime();
         const daysUntil = Math.round(diffMs / (1000 * 60 * 60 * 24));
 
-        // Só aparece se a reunião cai em 3 ou 7 dias a partir de HOJE e não foi avisado
+        // Só aparece se a reunião cai em 3 ou 7 dias a partir de HOJE, não foi
+        // avisado E ainda não tem data agendada (se já agendou no eAgenda, sai).
         const nextMeetingMonthKey = toMonthKey(nextMeeting);
         const alreadyNotified = client.statusByMonth[nextMeetingMonthKey]?.notified === true;
-        if ((daysUntil === 3 || daysUntil === 7) && !alreadyNotified) {
+        const alreadyScheduled = client.statusByMonth[nextMeetingMonthKey]?.customDate != null;
+        if ((daysUntil === 3 || daysUntil === 7) && !alreadyNotified && !alreadyScheduled) {
           result.push({
             client,
             nextMeetingDate: nextMeeting,
@@ -1589,9 +1591,11 @@ const billingData = useMemo(() => {
         );
 
         // Descobre o mês da próxima reunião para checar se já foi avisado
+        // ou se já tem data agendada (nesse caso sai da lista de lembretes).
         const nextMeetingMonthKey = toMonthKey(nextMeeting);
         const alreadyNotified = client.statusByMonth[nextMeetingMonthKey]?.notified === true;
-        if (alreadyNotified) return acc;
+        const alreadyScheduled = client.statusByMonth[nextMeetingMonthKey]?.customDate != null;
+        if (alreadyNotified || alreadyScheduled) return acc;
 
         if (diffFromDay === 3) {
           acc.tres.push({ client, nextMeetingDate: nextMeeting, lastMeetingDate: lastDoneDate.toLocaleDateString('pt-BR'), nextMeetingLabel });
