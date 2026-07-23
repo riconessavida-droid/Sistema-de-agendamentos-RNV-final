@@ -50,7 +50,8 @@ const dbToClient = (row: DbClientRow): Client => ({
   contractSigned: row.contract_signed ?? false,
   contractGrossValue: (row as any).contract_gross_value ?? undefined,
   contractMachineRate: (row as any).contract_machine_rate ?? undefined,
-  contractValue: (row as any).contract_value ?? undefined
+  contractValue: (row as any).contract_value ?? undefined,
+  billingMonthOverride: (row as any).billing_month_override ?? undefined
 });
 
 const clientToDb = (client: Client) => ({
@@ -149,10 +150,6 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
   const [manualClientId, setManualClientId] = useState<string | null>(null);
   const [conciliationFilter, setConciliationFilter] = useState<'all' | 'pending' | 'done'>('all');
   const [conciliationSearch, setConciliationSearch] = useState('');
-  const [billingMonthOverrides, setBillingMonthOverrides] = useState<Record<string, string>>(() => {
-    try { return JSON.parse(localStorage.getItem('rnv_billing_month_overrides') || '{}'); }
-    catch { return {}; }
-  });
 
   const [visibleMonths, setVisibleMonths] = useState<string[]>(() => {
     const months: string[] = [];
@@ -935,8 +932,8 @@ const billingData = useMemo(() => {
       paymentMonthKey = cycleMonths[4];
     }
 
-    // Override manual via drag-and-drop — sem alterar histórico do cliente
-    const override = billingMonthOverrides[client.id];
+    // Override manual via drag-and-drop (salvo no cliente, no Supabase)
+    const override = client.billingMonthOverride;
     if (override) paymentMonthKey = override;
 
     entries.push({ clientId: client.id, clientName: client.name, amount, isProportional, paymentMonthKey });
@@ -972,7 +969,7 @@ const billingData = useMemo(() => {
   const maxClientsInMonth = Math.max(...months.map(m => billingByMonth[m].length), 1);
 
   return { billingByMonth, totals, calculatedValue: currentContractValue, months, maxClientsInMonth };
-}, [clients, billingConfig, billingMonthOverrides]);
+}, [clients, billingConfig]);
   
   const taskReminders = useMemo(() => {
   const today = new Date();
@@ -1933,14 +1930,24 @@ const billingData = useMemo(() => {
                 className={`flex flex-col gap-2 min-w-[220px] rounded-xl transition-all ${dragOverMonth === month && draggingClientId ? 'ring-2 ring-yellow-400 bg-yellow-50/30' : ''}`}
                 onDragOver={(e) => { e.preventDefault(); setDragOverMonth(month); }}
                 onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverMonth(null); }}
-                onDrop={(e) => {
+                onDrop={async (e) => {
                   e.preventDefault();
-                  if (draggingClientId) {
-                    const updated = { ...billingMonthOverrides, [draggingClientId]: month };
-                    setBillingMonthOverrides(updated);
-                    localStorage.setItem('rnv_billing_month_overrides', JSON.stringify(updated));
-                    setDraggingClientId(null);
-                    setDragOverMonth(null);
+                  const clientId = draggingClientId;
+                  setDraggingClientId(null);
+                  setDragOverMonth(null);
+                  if (!clientId) return;
+                  const prev = clients.find(c => c.id === clientId)?.billingMonthOverride;
+                  // otimista: atualiza na hora
+                  setClients(cs => cs.map(c => c.id === clientId ? { ...c, billingMonthOverride: month } : c));
+                  // persiste no Supabase
+                  const { error } = await supabase
+                    .from('clients')
+                    .update({ billing_month_override: month })
+                    .eq('id', clientId);
+                  if (error) {
+                    // rollback + aviso
+                    setClients(cs => cs.map(c => c.id === clientId ? { ...c, billingMonthOverride: prev } : c));
+                    alert(`Não consegui salvar o deslocamento: ${error.message}`);
                   }
                 }}
               >

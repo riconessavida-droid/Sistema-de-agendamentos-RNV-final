@@ -40,6 +40,7 @@ export interface Client {
   contractValue?: number;   // valor líquido fixado na época do contrato (após taxa)
   contractGrossValue?: number; // valor bruto fixado na época do contrato
   contractMachineRate?: number; // taxa fixada na época do contrato
+  billingMonthOverride?: string; // mês (YYYY-MM) definido manualmente no faturamento (drag-and-drop)
 }
 
 export interface Reminder {
