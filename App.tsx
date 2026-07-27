@@ -930,7 +930,7 @@ const billingData = useMemo(() => {
         paymentMonthKey = cycleMonths[4];
       }
     } else {
-      paymentMonthKey = fifthMeetingMonth(client, cycleMonths);
+      paymentMonthKey = cycleMonths[4];
     }
 
     // Override manual via drag-and-drop (salvo no cliente, no Supabase)
