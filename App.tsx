@@ -901,22 +901,7 @@ const billingData = useMemo(() => {
   type Entry = { clientId: string; clientName: string; amount: number; isProportional: boolean; paymentMonthKey: string; paymentDay: number };
   const entries: Entry[] = [];
 
-  // Cobrança = 5º encontro contado a partir da PRIMEIRA reunião real do cliente.
-  // (Corrige casos em que o startMonthYear ficou um mês antes da 1ª reunião,
-  // o que empurrava a cobrança para o 4º encontro.)
-  // TRAVA: não altera nada cujo faturamento já esteja em jul/2026 ou antes —
-  // o usuário já resolveu tudo até julho.
-  const BILLING_FREEZE_UNTIL = '2026-07';
-  const fifthMeetingMonth = (client: Client, cycleMonths: string[]): string => {
-    const oldFifth = cycleMonths[4];
-    if (!oldFifth || oldFifth <= BILLING_FREEZE_UNTIL) return oldFifth;
-    const statusMonths = Object.keys(client.statusByMonth)
-      .filter(m => m >= client.startMonthYear)
-      .sort();
-    const firstMeetingMonth = statusMonths[0] ?? client.startMonthYear;
-    return getNextMonths(firstMeetingMonth, 5)[4];
-  };
-
+  // Cobrança = 5º encontro (cycleMonths[4], contado do mês de início do cliente).
   clients.forEach(client => {
     const totalMeetings = 5 + (client.extraMeetings ?? 0);
     const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
@@ -942,7 +927,7 @@ const billingData = useMemo(() => {
           isProportional = true;
         }
       } else {
-        paymentMonthKey = fifthMeetingMonth(client, cycleMonths);
+        paymentMonthKey = cycleMonths[4];
       }
     } else {
       paymentMonthKey = fifthMeetingMonth(client, cycleMonths);
@@ -960,15 +945,16 @@ const billingData = useMemo(() => {
   });
 
   // 2ª passagem: determinar range de meses dinamicamente (inclui passado se necessário)
-  const futureEnd = toMonthKey(addMonths(new Date(currentMonthKey + '-01'), 11));
+  // T12:00:00 (meio-dia local) evita cair no mês anterior no fuso do Brasil.
+  const futureEnd = toMonthKey(addMonths(new Date(currentMonthKey + '-01T12:00:00'), 11));
   const allMonths = entries.map(e => e.paymentMonthKey);
   const minMonth = allMonths.length ? allMonths.reduce((a, b) => (a < b ? a : b)) : currentMonthKey;
   const maxMonth = allMonths.length ? allMonths.reduce((a, b) => (a > b ? a : b)) : futureEnd;
   const effectiveMax = maxMonth > futureEnd ? maxMonth : futureEnd;
 
   const months: string[] = [];
-  let cur = new Date(minMonth + '-01');
-  const endDate = new Date(effectiveMax + '-01');
+  let cur = new Date(minMonth + '-01T12:00:00');
+  const endDate = new Date(effectiveMax + '-01T12:00:00');
   while (cur <= endDate) {
     months.push(toMonthKey(cur));
     cur = addMonths(cur, 1);
@@ -1947,7 +1933,8 @@ const billingData = useMemo(() => {
           {billingData.months.map((month) => {
             const clientsThisMonth = billingData.billingByMonth[month] || [];
             const total = billingData.totals[month] || 0;
-            const monthLabel = new Date(month + '-01').toLocaleDateString('pt-BR', { month: 'long', year: '2-digit' }).toUpperCase();
+            // meio-dia local evita voltar para o mês anterior no fuso do Brasil (UTC-3)
+            const monthLabel = new Date(month + '-01T12:00:00').toLocaleDateString('pt-BR', { month: 'long', year: '2-digit' }).toUpperCase();
             
             return (
               <div
