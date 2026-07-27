@@ -47,7 +47,7 @@ Retorna a lista de quem receberia lembrete hoje (7d/3d), sem enviar nada.
 
 Corpo:
 ```
-Olá {{1}}! 👋 Já é quase hora da sua próxima reunião de consultoria financeira da RNV. Garanta seu melhor horário agendando aqui: COLE_AQUI_O_LINK_DO_EAGENDA. Peço que agende o quanto antes justamente para mantermos o combinado de 1 reunião a cada +/- 30 dias, tudo bem? Aguardo seu agendamento.
+Olá {{1}}! 👋 Já é quase hora da sua próxima reunião de consultoria financeira da RNV. Garanta seu melhor horário agendando aqui: https://eagenda.com.br/agendamentos/incluir/eduardo-stetner/6523475A. Peço que agende o quanto antes justamente para mantermos o combinado de 1 reunião a cada +/- 30 dias, tudo bem? Aguardo seu agendamento.
 ```
 Exemplo para `{{1}}`: `Maria`
 
@@ -55,11 +55,11 @@ Exemplo para `{{1}}`: `Maria`
 
 Corpo:
 ```
-Oi {{1}}! Passando pra lembrar 😊 sua reunião mensal de consultoria RNV está chegando e ainda não vi seu agendamento. É rapidinho, escolhe seu horário aqui: COLE_AQUI_O_LINK_DO_EAGENDA. Lembrando que é fundamental mantermos uma reunião a cada +/- 30 dias, tudo bem? Aguardo seu retorno. Muito obrigado.
+Oi {{1}}! Passando pra lembrar 😊 sua reunião mensal de consultoria RNV está chegando e ainda não vi seu agendamento. É rapidinho, escolhe seu horário aqui: https://eagenda.com.br/agendamentos/incluir/eduardo-stetner/6523475A. Lembrando que é fundamental mantermos uma reunião a cada +/- 30 dias, tudo bem? Aguardo seu retorno. Muito obrigado.
 ```
 Exemplo para `{{1}}`: `Maria`
 
-> Troque `COLE_AQUI_O_LINK_DO_EAGENDA` pelo seu link real de agendamento do eAgenda.
+> Troque `https://eagenda.com.br/agendamentos/incluir/eduardo-stetner/6523475A` pelo seu link real de agendamento do eAgenda.
 > Se a Meta recusar como "Utility", reenvie ajustando o texto (menos promocional) —
 > lembrete de compromisso costuma passar como Utility.
 
