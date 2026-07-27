@@ -898,8 +898,24 @@ const billingData = useMemo(() => {
   const currentMonthKey = toMonthKey(new Date());
 
   // 1ª passagem: calcular mês e valor de cobrança de cada cliente
-  type Entry = { clientId: string; clientName: string; amount: number; isProportional: boolean; paymentMonthKey: string };
+  type Entry = { clientId: string; clientName: string; amount: number; isProportional: boolean; paymentMonthKey: string; paymentDay: number };
   const entries: Entry[] = [];
+
+  // Cobrança = 5º encontro contado a partir da PRIMEIRA reunião real do cliente.
+  // (Corrige casos em que o startMonthYear ficou um mês antes da 1ª reunião,
+  // o que empurrava a cobrança para o 4º encontro.)
+  // TRAVA: não altera nada cujo faturamento já esteja em jul/2026 ou antes —
+  // o usuário já resolveu tudo até julho.
+  const BILLING_FREEZE_UNTIL = '2026-07';
+  const fifthMeetingMonth = (client: Client, cycleMonths: string[]): string => {
+    const oldFifth = cycleMonths[4];
+    if (!oldFifth || oldFifth <= BILLING_FREEZE_UNTIL) return oldFifth;
+    const statusMonths = Object.keys(client.statusByMonth)
+      .filter(m => m >= client.startMonthYear)
+      .sort();
+    const firstMeetingMonth = statusMonths[0] ?? client.startMonthYear;
+    return getNextMonths(firstMeetingMonth, 5)[4];
+  };
 
   clients.forEach(client => {
     const totalMeetings = 5 + (client.extraMeetings ?? 0);
@@ -926,17 +942,21 @@ const billingData = useMemo(() => {
           isProportional = true;
         }
       } else {
-        paymentMonthKey = cycleMonths[4];
+        paymentMonthKey = fifthMeetingMonth(client, cycleMonths);
       }
     } else {
-      paymentMonthKey = cycleMonths[4];
+      paymentMonthKey = fifthMeetingMonth(client, cycleMonths);
     }
 
     // Override manual via drag-and-drop (salvo no cliente, no Supabase)
     const override = client.billingMonthOverride;
     if (override) paymentMonthKey = override;
 
-    entries.push({ clientId: client.id, clientName: client.name, amount, isProportional, paymentMonthKey });
+    // Dia provável de recebimento: a data do 5º encontro (se agendada),
+    // senão o dia recorrente das reuniões (dia da 1ª reunião).
+    const paymentDay = client.statusByMonth[paymentMonthKey]?.customDate ?? client.startDate;
+
+    entries.push({ clientId: client.id, clientName: client.name, amount, isProportional, paymentMonthKey, paymentDay });
   });
 
   // 2ª passagem: determinar range de meses dinamicamente (inclui passado se necessário)
@@ -954,13 +974,18 @@ const billingData = useMemo(() => {
     cur = addMonths(cur, 1);
   }
 
-  const billingByMonth: Record<string, Array<{ clientId: string; clientName: string; amount: number; isProportional: boolean }>> = {};
+  const billingByMonth: Record<string, Array<{ clientId: string; clientName: string; amount: number; isProportional: boolean; paymentDay: number }>> = {};
   months.forEach(m => { billingByMonth[m] = []; });
 
   entries.forEach(e => {
     if (billingByMonth[e.paymentMonthKey]) {
-      billingByMonth[e.paymentMonthKey].push({ clientId: e.clientId, clientName: e.clientName, amount: e.amount, isProportional: e.isProportional });
+      billingByMonth[e.paymentMonthKey].push({ clientId: e.clientId, clientName: e.clientName, amount: e.amount, isProportional: e.isProportional, paymentDay: e.paymentDay });
     }
+  });
+
+  // Ordena cada mês por dia de recebimento (crescente: menor dia no topo).
+  months.forEach(m => {
+    billingByMonth[m].sort((a, b) => a.paymentDay - b.paymentDay || a.clientName.localeCompare(b.clientName));
   });
 
   const totals: Record<string, number> = {};
@@ -2010,6 +2035,9 @@ const billingData = useMemo(() => {
                             </p>
                             <p className="text-[10px] font-bold text-slate-600 truncate mt-0.5">
                               {client.name}
+                            </p>
+                            <p className="text-[9px] font-black text-yellow-600 mt-0.5">
+                              Receb. {String(item.paymentDay).padStart(2, '0')}/{month.split('-')[1]}/{month.split('-')[0]}
                             </p>
                             {client.contractGrossValue && (
                               <p className="text-[8px] text-slate-400 font-bold">
