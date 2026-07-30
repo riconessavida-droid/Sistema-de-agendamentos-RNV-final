@@ -18,7 +18,7 @@ import { supabase } from './supabaseClient';
 
 const SESSION_KEY = 'rnv_current_session';
 
-type TabType = 'overview' | 'checklist' | 'reports' | 'users' | 'tasks' | 'billing' | 'history' | 'conciliation';
+type TabType = 'overview' | 'checklist' | 'reports' | 'users' | 'tasks' | 'billing' | 'history' | 'conciliation' | 'duplicates';
 type ChecklistSubFilter = 'all' | 'pending' | 'not_done' | 'rescheduled';
 type StatusFilter = 'all' | 'active' | 'finalized' | 'needs_attention' | 'unsigned';
 
@@ -719,6 +719,29 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
     return { done, total: activeClients.length, pending: Math.max(0, activeClients.length - done) };
   }, [activeClients, boardBookings]);
 
+  // Detecta clientes duplicados: mesmo telefone (quase certo) ou mesmo 1º+2º nome
+  // (conferir). Agrupa para o admin apagar o registro errado.
+  const duplicateGroups = useMemo(() => {
+    const firstTwo = (s: string) => normalizeName(s).split(' ').filter(Boolean).slice(0, 2).join(' ');
+    const phoneMap = new Map<string, Client[]>();
+    const nameMap = new Map<string, Client[]>();
+    clients.forEach(c => {
+      const p = (c.phoneDigits ?? '').replace(/\D/g, '').slice(-11);
+      if (p.length >= 10) { const a = phoneMap.get(p) ?? []; a.push(c); phoneMap.set(p, a); }
+      const n = firstTwo(c.name);
+      if (n) { const a = nameMap.get(n) ?? []; a.push(c); nameMap.set(n, a); }
+    });
+    const phoneGroups = [...phoneMap.entries()]
+      .filter(([, v]) => v.length > 1)
+      .map(([key, cs]) => ({ key, reason: 'phone' as const, clients: cs }));
+    const phoneIds = new Set(phoneGroups.flatMap(g => g.clients.map(c => c.id)));
+    const nameGroups = [...nameMap.entries()]
+      .filter(([, v]) => v.length > 1)
+      .filter(([, v]) => !v.every(c => phoneIds.has(c.id))) // já coberto por telefone
+      .map(([key, cs]) => ({ key, reason: 'name' as const, clients: cs }));
+    return { phoneGroups, nameGroups, total: phoneGroups.length + nameGroups.length };
+  }, [clients]);
+
   // Candidatos = agendamentos que alimentam o seletor manual de cada cliente
   // "sem agendamento". Inclui: (a) os que não casaram (PENDING) e (b) os que
   // casaram com um cliente que NÃO está ativo (duplicata/encerrado) — assim o
@@ -1132,6 +1155,14 @@ const billingData = useMemo(() => {
               <button onClick={() => setActiveTab('reports')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'reports' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Relatórios</button>
               <button onClick={() => setActiveTab('billing')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'billing' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Faturamento</button>
               <button onClick={() => setActiveTab('users')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'users' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Usuários</button>
+              <button onClick={() => setActiveTab('duplicates')} className={`relative py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'duplicates' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>
+                Duplicados
+                {duplicateGroups.total > 0 && (
+                  <span className="absolute -top-0.5 -right-3 min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold">
+                    {duplicateGroups.total}
+                  </span>
+                )}
+              </button>
             </>
           )}
         </div>
@@ -2664,6 +2695,76 @@ const billingData = useMemo(() => {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* ===== ABA: DUPLICADOS ===== */}
+        {activeTab === 'duplicates' && currentUser.role === UserRole.ADMIN && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-2xl font-black text-slate-800 flex items-center gap-2">
+                <Users className="w-6 h-6 text-yellow-500" />
+                Clientes Duplicados
+              </h2>
+              <p className="text-sm text-slate-500 mt-1">
+                Clientes com o mesmo telefone (duplicata quase certa) ou mesmo nome (confira).
+                Apague o registro errado — mantenha o que tem as reuniões corretas.
+              </p>
+            </div>
+
+            {duplicateGroups.total === 0 ? (
+              <div className="text-center py-16 bg-white rounded-xl border border-slate-100">
+                <CheckCircle2 className="w-10 h-10 text-green-400 mx-auto mb-3" />
+                <p className="text-slate-600 font-semibold">Nenhum duplicado encontrado 🎉</p>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {[...duplicateGroups.phoneGroups, ...duplicateGroups.nameGroups].map((group, gi) => (
+                  <div key={`${group.reason}-${gi}`} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                    <div className={`px-4 py-2 text-[11px] font-black uppercase tracking-widest flex items-center gap-2 ${group.reason === 'phone' ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600'}`}>
+                      {group.reason === 'phone'
+                        ? <>📞 Mesmo telefone · {group.clients.length} registros</>
+                        : <>🔤 Mesmo nome (conferir) · {group.clients.length} registros</>}
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-slate-100">
+                      {group.clients.map(c => {
+                        const inactive = isClientInactive(c);
+                        const doneCount = Object.values(c.statusByMonth).filter((s: any) => s?.status === MeetingStatus.DONE).length;
+                        const hasDate = Object.values(c.statusByMonth).some((s: any) => s?.customDate != null);
+                        return (
+                          <div key={c.id} className="p-4">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="text-sm font-bold text-slate-800 truncate">{c.name}</p>
+                                <p className="text-xs text-slate-400">{c.phoneDigits}</p>
+                              </div>
+                              <button
+                                onClick={() => deleteClient(c.id)}
+                                className="p-2 rounded-lg bg-red-50 text-red-500 hover:bg-red-500 hover:text-white transition-colors shrink-0"
+                                title="Excluir este registro"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-bold">
+                              <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">Início {getMonthLabel(c.startMonthYear)}</span>
+                              <span className={`px-2 py-0.5 rounded-full ${inactive ? 'bg-slate-200 text-slate-600' : 'bg-green-100 text-green-700'}`}>{inactive ? 'Encerrado' : 'Ativo'}</span>
+                              <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">{doneCount} reunião(ões) feita(s)</span>
+                              {hasDate && <span className="px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700">tem data agendada</span>}
+                              {c.contractSigned && <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600">contrato ✓</span>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+                <p className="text-xs text-slate-400">
+                  Dica: geralmente o registro certo é o que tem <b>mais reuniões feitas</b> e/ou <b>data agendada</b>.
+                  Apague o outro. Se um agendamento ficar "solto", ele reaparece como candidato na aba Conciliação.
+                </p>
+              </div>
+            )}
           </div>
         )}
       </main>
