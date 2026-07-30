@@ -14,11 +14,12 @@ import {
 import { ClientForm } from './ClientForm';
 import { RemindersPanel } from './RemindersPanel';
 import { Auth } from './Auth';
+import { SchedulingTab } from './scheduling/SchedulingTab';
 import { supabase } from './supabaseClient';
 
 const SESSION_KEY = 'rnv_current_session';
 
-type TabType = 'overview' | 'checklist' | 'reports' | 'users' | 'tasks' | 'billing' | 'history' | 'conciliation' | 'duplicates';
+type TabType = 'overview' | 'checklist' | 'reports' | 'users' | 'tasks' | 'billing' | 'history' | 'conciliation' | 'duplicates' | 'scheduling';
 type ChecklistSubFilter = 'all' | 'pending' | 'not_done' | 'rescheduled';
 type StatusFilter = 'all' | 'active' | 'finalized' | 'needs_attention' | 'unsigned';
 
@@ -1145,6 +1146,7 @@ const billingData = useMemo(() => {
           <button onClick={() => setActiveTab('overview')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'overview' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Visão Geral</button>
           <button onClick={() => setActiveTab('checklist')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'checklist' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Checklist Mensal</button>
           <button onClick={() => setActiveTab('tasks')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'tasks' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Tarefas do Dia</button>
+          <button onClick={() => setActiveTab('scheduling')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'scheduling' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Agenda</button>
           <button onClick={() => setActiveTab('history')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'history' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Histórico</button>
           <button onClick={() => setActiveTab('conciliation')} className={`relative py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'conciliation' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>
             Conciliação
@@ -2489,6 +2491,11 @@ const billingData = useMemo(() => {
         })()}
 
         {/* ===== ABA: CONCILIAÇÃO (eAgenda) ===== */}
+        {/* ===== ABA: AGENDA (sistema de agendamento próprio) ===== */}
+        {activeTab === 'scheduling' && (
+          <SchedulingTab clients={clients} role={currentUser.role} />
+        )}
+
         {activeTab === 'conciliation' && (
           <div className="space-y-6">
             <div className="flex items-center justify-between flex-wrap gap-3">
