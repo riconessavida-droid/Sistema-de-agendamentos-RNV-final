@@ -1,29 +1,33 @@
 // =====================================================================
 // Edge Function: send-reminders
 // Roda 1x/dia (via cron). Para cada cliente ATIVO, calcula a próxima
-// reunião (última reunião feita + ~30 dias) e envia lembrete no WhatsApp:
-//   - 7 dias antes  -> template "lembrete_7dias"
-//   - 3 dias antes  -> template "lembrete_3dias"
+// reunião (última reunião feita + ~30 dias) e dispara lembrete:
+//   - 7 dias antes  -> POST no webhook do parceiro (template 7 dias)
+//   - 3 dias antes  -> POST no webhook do parceiro (template 3 dias)
 // Regras: NÃO manda se o cliente já agendou aquele mês; NÃO repete um
 // lembrete já enviado (reminder_log); a 2ª mensagem não sai se ele agendou
 // depois da 1ª (a data preenchida faz pular).
 //
-// Envio via Meta Cloud API (Coexistence no número da assistente).
-// Segredos: WA_ACCESS_TOKEN, WA_PHONE_NUMBER_ID.
+// O ENVIO em si é feito pela plataforma do parceiro (empresa da IA que já
+// usa o número da assistente). Nosso sistema só faz um POST para o
+// "webhook de entrada" deles, com os dados do destinatário; eles enviam
+// o template aprovado. Assim usamos o número da assistente sem conflito.
+//
+// Segredos:
+//   REMINDER_WEBHOOK_7D_URL  -> webhook do parceiro que envia o template de 7 dias
+//   REMINDER_WEBHOOK_3D_URL  -> webhook do parceiro que envia o template de 3 dias
+//   REMINDER_WEBHOOK_TOKEN   -> (opcional) valor do header Authorization, se exigirem
+//
 // Modo teste: POST {"dryRun": true}  -> não envia, só retorna quem receberia.
-// Sem WA_ACCESS_TOKEN configurado -> assume dry-run automaticamente.
+// Sem as URLs configuradas -> dry-run automático.
 //
 // Deploy COM verify-jwt LIGADO (chamado pelo cron com a anon key).
 // =====================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const GRAPH_VERSION = "v21.0";
 const INACTIVE = new Set(["CLOSED_CONTRACT", "CANCELLED_EARLY"]);
 const CYCLE_DAYS = 30;
-const TEMPLATE_7D = "lembrete_7dias";
-const TEMPLATE_3D = "lembrete_3dias";
-const LANG = "pt_BR";
 
 const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, x-client-info, apikey, content-type" };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { "content-type": "application/json", ...cors } });
@@ -58,9 +62,10 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
 
-  const token = Deno.env.get("WA_ACCESS_TOKEN");
-  const phoneNumberId = Deno.env.get("WA_PHONE_NUMBER_ID");
-  let dryRun = !token || !phoneNumberId;
+  const url7d = Deno.env.get("REMINDER_WEBHOOK_7D_URL");
+  const url3d = Deno.env.get("REMINDER_WEBHOOK_3D_URL");
+  const authHeader = Deno.env.get("REMINDER_WEBHOOK_TOKEN"); // opcional
+  let dryRun = !url7d && !url3d;
   try { const b = await req.json(); if (b?.dryRun === true) dryRun = true; } catch { /* sem body */ }
 
   const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
@@ -75,7 +80,6 @@ Deno.serve(async (req: Request) => {
   if (error) return json({ error: error.message }, 500);
   const clients = clientsRaw ?? [];
 
-  // lembretes já enviados (para não repetir)
   const { data: logRaw } = await supabase.from("reminder_log").select("client_id, month_key, reminder_type");
   const alreadySent = new Set((logRaw ?? []).map((r: any) => `${r.client_id}|${r.month_key}|${r.reminder_type}`));
 
@@ -90,7 +94,6 @@ Deno.serve(async (req: Request) => {
     const cycle = getNextMonths(c.start_month_year, total);
     const sbm = c.status_by_month ?? {};
 
-    // última reunião FEITA
     let lastDoneUTC: number | null = null;
     for (let i = cycle.length - 1; i >= 0; i--) {
       const s = sbm[cycle[i]];
@@ -108,10 +111,8 @@ Deno.serve(async (req: Request) => {
     const nextMonthKey = monthKeyFromUTC(nextUTC);
     const nextEntry = sbm[nextMonthKey];
 
-    // já agendou (data preenchida) OU já avisado manualmente -> não manda
     if (nextEntry?.customDate != null || nextEntry?.notified === true) continue;
 
-    // janelas (com folga para o caso do cron falhar num dia):
     let type: "7d" | "3d" | null = null;
     if (daysUntil >= 4 && daysUntil <= 7) type = "7d";
     else if (daysUntil >= 1 && daysUntil <= 3) type = "3d";
@@ -122,54 +123,55 @@ Deno.serve(async (req: Request) => {
     due.push({ client: c, type, monthKey: nextMonthKey, daysUntil, to: toWhatsApp(c.phone_digits) });
   }
 
-  const summary = { total: due.length, sent: 0, failed: 0, skippedNoPhone: 0, dryRun };
+  const summary = { total: due.length, sent: 0, failed: 0, skippedNoPhone: 0, skippedNoUrl: 0, dryRun };
   const details: any[] = [];
 
   for (const d of due) {
-    const templateName = d.type === "7d" ? TEMPLATE_7D : TEMPLATE_3D;
     if (!d.to) {
       summary.skippedNoPhone++;
       details.push({ client: d.client.name, type: d.type, status: "no_phone" });
       continue;
     }
 
+    const payload = {
+      phone: d.to,
+      first_name: firstName(d.client.name),
+      full_name: d.client.name,
+      reminder_type: d.type,
+      month_key: d.monthKey,
+    };
+
     if (dryRun) {
-      details.push({ client: d.client.name, to: d.to, type: d.type, monthKey: d.monthKey, template: templateName, status: "dry" });
+      details.push({ ...payload, status: "dry" });
+      continue;
+    }
+
+    const targetUrl = d.type === "7d" ? url7d : url3d;
+    if (!targetUrl) {
+      summary.skippedNoUrl++;
+      details.push({ client: d.client.name, type: d.type, status: "no_url" });
       continue;
     }
 
     try {
-      const resp = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          to: d.to,
-          type: "template",
-          template: {
-            name: templateName,
-            language: { code: LANG },
-            components: [{ type: "body", parameters: [{ type: "text", text: firstName(d.client.name) }] }],
-          },
-        }),
-      });
-      const body = await resp.json();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (authHeader) headers["Authorization"] = authHeader;
+      const resp = await fetch(targetUrl, { method: "POST", headers, body: JSON.stringify(payload) });
+      const text = await resp.text();
       if (resp.ok) {
-        const waId = body?.messages?.[0]?.id ?? null;
         summary.sent++;
         await supabase.from("reminder_log").upsert(
-          { client_id: d.client.id, month_key: d.monthKey, reminder_type: d.type, status: "sent", wa_message_id: waId },
+          { client_id: d.client.id, month_key: d.monthKey, reminder_type: d.type, status: "sent", detail: text.slice(0, 200) },
           { onConflict: "client_id,month_key,reminder_type" },
         );
-        details.push({ client: d.client.name, type: d.type, status: "sent", waId });
+        details.push({ client: d.client.name, type: d.type, status: "sent" });
       } else {
         summary.failed++;
-        const msg = JSON.stringify(body?.error ?? body).slice(0, 300);
         await supabase.from("reminder_log").upsert(
-          { client_id: d.client.id, month_key: d.monthKey, reminder_type: d.type, status: "failed", detail: msg },
+          { client_id: d.client.id, month_key: d.monthKey, reminder_type: d.type, status: "failed", detail: `${resp.status}: ${text.slice(0, 200)}` },
           { onConflict: "client_id,month_key,reminder_type" },
         );
-        details.push({ client: d.client.name, type: d.type, status: "failed", error: msg });
+        details.push({ client: d.client.name, type: d.type, status: "failed", http: resp.status });
       }
     } catch (e) {
       summary.failed++;
