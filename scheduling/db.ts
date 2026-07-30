@@ -186,6 +186,57 @@ export const saveSettings = async (settings: SchedulingSettings): Promise<string
   return error?.message ?? null;
 };
 
+const newToken = () =>
+  (crypto.randomUUID() + crypto.randomUUID()).replace(/-/g, '').slice(0, 32);
+
+/**
+ * O link pessoal do cliente. É o que substitui a conciliação: como o token
+ * identifica o cliente, o agendamento cai no lugar certo sem adivinhação.
+ *
+ * Reaproveita o link existente — o mesmo endereço serve para sempre, e é
+ * ele que vai dentro dos lembretes de WhatsApp.
+ */
+export const ensureBookingLink = async (
+  clientId: string
+): Promise<{ token?: string; error?: string }> => {
+  const { data: existing, error: readError } = await supabase
+    .from('booking_links')
+    .select('token')
+    .eq('client_id', clientId)
+    .eq('active', true)
+    .is('fit_in_starts_at', null)
+    .limit(1);
+
+  if (readError) return { error: readError.message };
+  if (existing && existing.length > 0) return { token: existing[0].token };
+
+  const token = newToken();
+  const { error } = await supabase
+    .from('booking_links')
+    .insert({ token, client_id: clientId });
+
+  return error ? { error: error.message } : { token };
+};
+
+/**
+ * Link de encaixe: vale por um único horário, mesmo fora da grade, e some
+ * depois de usado. Para quando o cliente pede "consegue me atender quarta
+ * às 7h?" sem precisar bagunçar a grade inteira.
+ */
+export const createFitInLink = async (
+  clientId: string,
+  day: DayKey,
+  time: string
+): Promise<{ token?: string; error?: string }> => {
+  const token = newToken();
+  const { error } = await supabase.from('booking_links').insert({
+    token,
+    client_id: clientId,
+    fit_in_starts_at: zonedToInstant(day, time).toISOString()
+  });
+  return error ? { error: error.message } : { token };
+};
+
 export type NewBlock = {
   dateFrom: DayKey;
   dateTo?: DayKey | null;

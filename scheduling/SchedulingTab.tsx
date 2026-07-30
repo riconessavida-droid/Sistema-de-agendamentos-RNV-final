@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { CalendarDays, ListChecks, Lock, RefreshCw, Settings2 } from 'lucide-react';
+import { CalendarDays, Link2, ListChecks, Lock, RefreshCw, Settings2 } from 'lucide-react';
 import { Client, UserRole } from '../types';
 import {
   SchedulingData,
@@ -15,8 +15,9 @@ import { WeekCalendar, startOfWeek, ClientBadge } from './WeekCalendar';
 import { HoursConfig } from './HoursConfig';
 import { BlocksPanel } from './BlocksPanel';
 import { AppointmentDetail } from './AppointmentDetail';
+import { LinksPanel } from './LinksPanel';
 
-type SubTab = 'week' | 'day' | 'hours' | 'blocks';
+type SubTab = 'week' | 'day' | 'links' | 'hours' | 'blocks';
 
 const EMPTY: SchedulingData = {
   settings: DEFAULT_SETTINGS,
@@ -104,6 +105,7 @@ export function SchedulingTab({ clients, role }: SchedulingTabProps) {
   const SUB_TABS: Array<{ id: SubTab; label: string; icon: React.ReactNode }> = [
     { id: 'week', label: 'Semana', icon: <CalendarDays className="w-3.5 h-3.5" /> },
     { id: 'day', label: 'Lista do dia', icon: <ListChecks className="w-3.5 h-3.5" /> },
+    { id: 'links', label: 'Links', icon: <Link2 className="w-3.5 h-3.5" /> },
     { id: 'hours', label: 'Horários', icon: <Settings2 className="w-3.5 h-3.5" /> },
     { id: 'blocks', label: 'Bloqueios', icon: <Lock className="w-3.5 h-3.5" /> }
   ];
@@ -228,6 +230,8 @@ export function SchedulingTab({ clients, role }: SchedulingTabProps) {
           </div>
         </div>
       )}
+
+      {subTab === 'links' && <LinksPanel clients={clients} now={now} />}
 
       {subTab === 'hours' && (
         <HoursConfig
