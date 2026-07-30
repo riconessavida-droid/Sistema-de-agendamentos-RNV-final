@@ -37,6 +37,10 @@ export interface Client {
   extraMeetings: number;
   closedAt?: string;
   contractSigned?: boolean;
+  email?: string;           // aprendido na assinatura do contrato (D4Sign)
+  cpf?: string;             // só dígitos; validado no dígito verificador
+  contractSignedAt?: string;
+  contractIssue?: string;   // motivo da pendência (ex.: "CPF inválido"); undefined = ok
   contractValue?: number;   // valor líquido fixado na época do contrato (após taxa)
   contractGrossValue?: number; // valor bruto fixado na época do contrato
   contractMachineRate?: number; // taxa fixada na época do contrato

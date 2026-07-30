@@ -48,6 +48,10 @@ const dbToClient = (row: DbClientRow): Client => ({
   extraMeetings: row.extra_meetings ?? 0,
   closedAt: row.closed_at ?? undefined,
   contractSigned: row.contract_signed ?? false,
+  email: (row as any).email ?? undefined,
+  cpf: (row as any).cpf ?? undefined,
+  contractSignedAt: (row as any).contract_signed_at ?? undefined,
+  contractIssue: (row as any).contract_issue ?? undefined,
   contractGrossValue: (row as any).contract_gross_value ?? undefined,
   contractMachineRate: (row as any).contract_machine_rate ?? undefined,
   contractValue: (row as any).contract_value ?? undefined,
@@ -1292,11 +1296,19 @@ const billingData = useMemo(() => {
                                       ? orange ? 'bg-white/30 text-white' : 'bg-green-100 text-green-700 border border-green-300'
                                       : orange ? 'bg-white/10 text-white/70 border border-white/30' : 'bg-yellow-50 text-yellow-700 border border-yellow-300'
                                   }`}
-                                  title={client.contractSigned ? 'Contrato assinado (clique para alterar)' : 'Contrato pendente (clique para marcar como assinado)'}
+                                  title={client.contractIssue
+                                    ? `${client.contractIssue} — o cliente precisa refazer o contrato`
+                                    : client.contractSigned ? 'Contrato assinado (clique para alterar)' : 'Contrato pendente (clique para marcar como assinado)'}
                                 >
                                   <FileSignature className="w-2.5 h-2.5" />
                                   {client.contractSigned ? 'Contrato Assinado' : 'Contrato Pendente'}
                                 </button>
+                                {/* Preencheu errado: mostra o motivo pra assistente saber o que cobrar */}
+                                {client.contractIssue && (
+                                  <p className={`text-[9px] font-black mt-0.5 leading-tight ${orange ? 'text-white' : 'text-red-600'}`}>
+                                    ⚠ {client.contractIssue}
+                                  </p>
+                                )}
 {inactive && client.closedAt && (
   <p className="text-[9px] text-slate-400 font-medium mt-0.5">
     Encerrado em {new Date(client.closedAt + 'T12:00:00').toLocaleDateString('pt-BR')}
