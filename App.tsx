@@ -691,8 +691,11 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
       if (!cur || b.startDateTime > cur.startDateTime) byClient.set(b.matchedClientId, b);
     });
     const term = normalizeName(conciliationSearch);
+    const digits = conciliationSearch.replace(/\D/g, '');
     return activeClients
-      .filter(c => !term || normalizeName(c.name).includes(term) || (c.phoneDigits ?? '').includes(conciliationSearch.replace(/\D/g, '')))
+      .filter(c => !term
+        || normalizeName(c.name).includes(term)
+        || (digits.length > 0 && (c.phoneDigits ?? '').replace(/\D/g, '').includes(digits)))
       .map(c => ({ client: c, booking: byClient.get(c.id) ?? null }))
       .filter(row => {
         if (conciliationFilter === 'done') return !!row.booking;
@@ -708,16 +711,25 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
   }, [activeClients, boardBookings, conciliationSearch, conciliationFilter]);
 
   const conciliationStats = useMemo(() => {
-    const done = new Set(boardBookings.filter(b => b.matchedClientId).map(b => b.matchedClientId)).size;
-    return { done, total: activeClients.length, pending: activeClients.length - done };
+    // conta só clientes ATIVOS conciliados (evita passar de 'total' e dar negativo)
+    const activeIds = new Set(activeClients.map(c => c.id));
+    const done = new Set(
+      boardBookings.filter(b => b.matchedClientId && activeIds.has(b.matchedClientId)).map(b => b.matchedClientId)
+    ).size;
+    return { done, total: activeClients.length, pending: Math.max(0, activeClients.length - done) };
   }, [activeClients, boardBookings]);
 
-  // Candidatos = agendamentos do eAgenda que não casaram automaticamente.
-  // Não viram linha; alimentam o seletor manual de cada cliente "sem agendamento".
-  const candidates = useMemo(
-    () => boardBookings.filter(b => b.conciliationStatus === 'PENDING' && !b.matchedClientId),
-    [boardBookings]
-  );
+  // Candidatos = agendamentos que alimentam o seletor manual de cada cliente
+  // "sem agendamento". Inclui: (a) os que não casaram (PENDING) e (b) os que
+  // casaram com um cliente que NÃO está ativo (duplicata/encerrado) — assim o
+  // cliente ativo certo pode "recuperar" o agendamento preso na duplicata.
+  const candidates = useMemo(() => {
+    const activeIds = new Set(activeClients.map(c => c.id));
+    return boardBookings.filter(b =>
+      (b.conciliationStatus === 'PENDING' && !b.matchedClientId) ||
+      (!!b.matchedClientId && !activeIds.has(b.matchedClientId))
+    );
+  }, [boardBookings, activeClients]);
 
   // Ordena os candidatos por semelhança de nome com o cliente (melhor sugestão 1º).
   const candidatesFor = (client: Client) =>
