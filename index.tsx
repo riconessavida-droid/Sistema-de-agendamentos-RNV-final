@@ -4,6 +4,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import { BookingPage } from './scheduling/BookingPage';
 import { ManageBookingPage } from './scheduling/ManageBookingPage';
+import { GoogleCallbackPage } from './scheduling/GooglePanel';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -28,6 +29,9 @@ function pickPage() {
   }
   if (segments[0] === 'r' && segments[1]) {
     return <ManageBookingPage manageToken={segments[1]} />;
+  }
+  if (segments[0] === 'google-callback') {
+    return <GoogleCallbackPage />;
   }
   return <App />;
 }

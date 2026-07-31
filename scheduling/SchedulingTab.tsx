@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { CalendarDays, Link2, ListChecks, Lock, RefreshCw, Settings2 } from 'lucide-react';
+import { CalendarDays, Link2, ListChecks, Lock, RefreshCw, Settings2, Video } from 'lucide-react';
 import { Client, UserRole } from '../types';
 import {
   SchedulingData,
@@ -16,8 +16,9 @@ import { HoursConfig } from './HoursConfig';
 import { BlocksPanel } from './BlocksPanel';
 import { AppointmentDetail } from './AppointmentDetail';
 import { LinksPanel } from './LinksPanel';
+import { GooglePanel } from './GooglePanel';
 
-type SubTab = 'week' | 'day' | 'links' | 'hours' | 'blocks';
+type SubTab = 'week' | 'day' | 'links' | 'hours' | 'blocks' | 'google';
 
 const EMPTY: SchedulingData = {
   settings: DEFAULT_SETTINGS,
@@ -107,7 +108,8 @@ export function SchedulingTab({ clients, role }: SchedulingTabProps) {
     { id: 'day', label: 'Lista do dia', icon: <ListChecks className="w-3.5 h-3.5" /> },
     { id: 'links', label: 'Links', icon: <Link2 className="w-3.5 h-3.5" /> },
     { id: 'hours', label: 'Horários', icon: <Settings2 className="w-3.5 h-3.5" /> },
-    { id: 'blocks', label: 'Bloqueios', icon: <Lock className="w-3.5 h-3.5" /> }
+    { id: 'blocks', label: 'Bloqueios', icon: <Lock className="w-3.5 h-3.5" /> },
+    { id: 'google', label: 'Google', icon: <Video className="w-3.5 h-3.5" /> }
   ];
 
   return (
@@ -252,6 +254,8 @@ export function SchedulingTab({ clients, role }: SchedulingTabProps) {
           onImportEagenda={handleImport}
         />
       )}
+
+      {subTab === 'google' && <GooglePanel canEdit={canEditGrid} />}
 
       {selected && (
         <AppointmentDetail

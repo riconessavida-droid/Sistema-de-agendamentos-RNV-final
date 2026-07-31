@@ -204,6 +204,140 @@ const firstName = (full: string): string => (full ?? "").trim().split(/\s+/)[0] 
 
 const newToken = () => crypto.randomUUID().replace(/-/g, "");
 
+// ------------------------------------------------------------- Google
+// Se o Google falhar, o AGENDAMENTO NÃO FALHA: grava sem link, registra o
+// erro e o cliente vê "o link chega no WhatsApp". Perder uma reunião
+// porque o Google piscou seria muito pior que ficar sem link por um tempo.
+
+async function googleAccessToken(supabase: any): Promise<string | null> {
+  const { data } = await supabase
+    .from("google_credentials").select("*").eq("id", 1).maybeSingle();
+  if (!data?.refresh_token) return null;
+
+  // Reaproveita o access_token enquanto ele valer (com 2 min de folga).
+  if (data.access_token && data.expires_at && new Date(data.expires_at).getTime() - Date.now() > 120000) {
+    return data.access_token;
+  }
+
+  const clientId = Deno.env.get("GOOGLE_CLIENT_ID");
+  const clientSecret = Deno.env.get("GOOGLE_CLIENT_SECRET");
+  if (!clientId || !clientSecret) return null;
+
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: data.refresh_token,
+      grant_type: "refresh_token"
+    })
+  });
+
+  const tokens = await response.json();
+
+  if (!response.ok || !tokens.access_token) {
+    // Token revogado (troca de senha, "remover acesso" na conta Google).
+    // Fica registrado para a aba Google avisar em vermelho.
+    await supabase.from("google_credentials").update({
+      last_error: tokens.error_description ?? tokens.error ?? "falha ao renovar o acesso"
+    }).eq("id", 1);
+    return null;
+  }
+
+  await supabase.from("google_credentials").update({
+    access_token: tokens.access_token,
+    expires_at: new Date(Date.now() + (tokens.expires_in ?? 3600) * 1000).toISOString(),
+    last_error: null
+  }).eq("id", 1);
+
+  return tokens.access_token;
+}
+
+/** Horários em que o Eduardo já tem compromisso na agenda pessoal dele. */
+async function googleBusyRanges(
+  supabase: any, fromIso: string, toIso: string
+): Promise<Array<{ start: number; end: number }>> {
+  try {
+    const token = await googleAccessToken(supabase);
+    if (!token) return [];
+
+    const response = await fetch("https://www.googleapis.com/calendar/v3/freeBusy", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        timeMin: fromIso, timeMax: toIso, timeZone: TIMEZONE,
+        items: [{ id: "primary" }]
+      })
+    });
+    if (!response.ok) return [];
+
+    const body = await response.json();
+    const busy = body?.calendars?.primary?.busy ?? [];
+    return busy.map((slot: any) => ({
+      start: new Date(slot.start).getTime(),
+      end: new Date(slot.end).getTime()
+    }));
+  } catch {
+    // Fail-open de propósito: se o Google não responde, é melhor oferecer
+    // os horários (e no pior caso ter um conflito) do que mostrar uma
+    // agenda vazia e perder agendamentos.
+    return [];
+  }
+}
+
+async function createMeetEvent(supabase: any, appointment: {
+  startsAt: Date; endsAt: Date; name: string; email: string | null;
+}): Promise<{ meetUrl?: string; eventId?: string; error?: string }> {
+  try {
+    const token = await googleAccessToken(supabase);
+    if (!token) return { error: "google_nao_conectado" };
+
+    const url = new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");
+    url.searchParams.set("conferenceDataVersion", "1");
+    // Faz o Google mandar o convite por e-mail para o cliente (de graça).
+    url.searchParams.set("sendUpdates", "all");
+
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        summary: `Consultoria financeira - ${appointment.name}`,
+        start: { dateTime: appointment.startsAt.toISOString(), timeZone: TIMEZONE },
+        end: { dateTime: appointment.endsAt.toISOString(), timeZone: TIMEZONE },
+        attendees: appointment.email ? [{ email: appointment.email }] : [],
+        conferenceData: {
+          createRequest: {
+            requestId: crypto.randomUUID(),
+            conferenceSolutionKey: { type: "hangoutsMeet" }
+          }
+        },
+        // Os mesmos lembretes que o eAgenda já configurava no evento.
+        reminders: {
+          useDefault: false,
+          overrides: [
+            { method: "email", minutes: 24 * 60 },
+            { method: "popup", minutes: 30 }
+          ]
+        }
+      })
+    });
+
+    const event = await response.json();
+    if (!response.ok) {
+      return { error: event?.error?.message ?? `HTTP ${response.status}` };
+    }
+
+    const meetUrl =
+      event.hangoutLink ??
+      event.conferenceData?.entryPoints?.find((e: any) => e.entryPointType === "video")?.uri;
+
+    return { meetUrl, eventId: event.id };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
 /** Última data de reunião do cliente, lida do statusByMonth. */
 function lastMeetingDay(statusByMonth: Record<string, any>): string | null {
   let best: string | null = null;
@@ -304,7 +438,22 @@ Deno.serve(async (req: Request) => {
       zonedToInstant(addDays(lastDay, 1), "00:00").toISOString()
     );
 
-    const slots = computeFreeSlots(now, config.settings, config.rules, config.blocks, taken, config.overrides);
+    let slots = computeFreeSlots(now, config.settings, config.rules, config.blocks, taken, config.overrides);
+
+    // Tira o que já está comprometido na agenda pessoal do Google.
+    const busy = await googleBusyRanges(
+      supabase,
+      zonedToInstant(today, "00:00").toISOString(),
+      zonedToInstant(addDays(lastDay, 1), "00:00").toISOString()
+    );
+    if (busy.length > 0) {
+      const duration = config.settings.slot_duration_minutes * 60000;
+      slots = slots.filter(slot => {
+        const start = slot.startsAt.getTime();
+        const end = start + duration;
+        return !busy.some(range => start < range.end && end > range.start);
+      });
+    }
 
     const byDay = new Map<string, string[]>();
     for (const slot of slots) {
@@ -437,7 +586,24 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    return json({ ok: true, appointmentId: created.id, manageToken });
+    // Evento no Google + link do Meet. Falha aqui não desfaz o agendamento.
+    const meet = await createMeetEvent(supabase, {
+      startsAt, endsAt, name: name || "Cliente", email
+    });
+
+    await supabase.from("appointments").update({
+      meet_url: meet.meetUrl ?? null,
+      google_event_id: meet.eventId ?? null,
+      meet_attempts: 1,
+      meet_error: meet.error ?? null
+    }).eq("id", created.id);
+
+    return json({
+      ok: true,
+      appointmentId: created.id,
+      manageToken,
+      meetUrl: meet.meetUrl ?? null
+    });
   }
 
   // -------------------------------------------------------------- manage
@@ -477,6 +643,19 @@ Deno.serve(async (req: Request) => {
       canceled_at: new Date().toISOString(),
       cancel_reason: "Cancelado pelo cliente"
     }).eq("id", appointment.id);
+
+    // Tira o evento da agenda do Google (e avisa o cliente pelo convite).
+    if (appointment.google_event_id) {
+      try {
+        const token = await googleAccessToken(supabase);
+        if (token) {
+          await fetch(
+            `https://www.googleapis.com/calendar/v3/calendars/primary/events/${appointment.google_event_id}?sendUpdates=all`,
+            { method: "DELETE", headers: { authorization: `Bearer ${token}` } }
+          );
+        }
+      } catch { /* o cancelamento no sistema vale mesmo se o Google falhar */ }
+    }
 
     // Limpa a data do mês, sem tocar em reunião já realizada.
     if (appointment.client_id) {
