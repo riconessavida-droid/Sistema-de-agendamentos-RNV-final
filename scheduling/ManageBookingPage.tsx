@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { CalendarCheck, Loader2, Video, XCircle } from 'lucide-react';
+import { Loader2, Video, XCircle } from 'lucide-react';
+import { Logo } from './Logo';
 import {
   ManageResponse,
   cancelBooking,
@@ -57,11 +58,8 @@ export function ManageBookingPage({ manageToken }: ManageBookingPageProps) {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center px-4 py-8">
       <div className="w-full max-w-md">
-        <header className="text-center mb-6">
-          <div className="inline-flex items-center gap-2 text-yellow-600 font-black text-lg">
-            <CalendarCheck className="w-5 h-5" />
-            RNV Consultoria Financeira
-          </div>
+        <header className="flex justify-center mb-6">
+          <Logo />
         </header>
 
         <main className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 sm:p-6">
