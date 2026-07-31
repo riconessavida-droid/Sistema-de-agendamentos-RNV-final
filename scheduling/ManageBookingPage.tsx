@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2, Video, XCircle } from 'lucide-react';
-import { Logo } from './Logo';
+import { Logo, RNV_OFFWHITE } from './Logo';
 import {
   ManageResponse,
   cancelBooking,
@@ -56,7 +56,7 @@ export function ManageBookingPage({ manageToken }: ManageBookingPageProps) {
   const canceled = appointment?.status === 'CANCELED';
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col items-center px-4 py-8">
+    <div className="font-body min-h-screen flex flex-col items-center px-4 py-8" style={{ backgroundColor: RNV_OFFWHITE }}>
       <div className="w-full max-w-md">
         <header className="flex justify-center mb-6">
           <Logo />

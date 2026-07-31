@@ -6,8 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RNV Consultoria Financeira</title>
     <!-- Favicon: a mesma logo em SVG, embutida (sem arquivo, sem requisição). -->
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='24' fill='%230F4C3E'/%3E%3Cg fill='%23F0B429'%3E%3Crect x='26' y='55' width='11' height='18' rx='3.5'/%3E%3Crect x='44.5' y='42' width='11' height='31' rx='3.5'/%3E%3Crect x='63' y='26' width='11' height='47' rx='3.5'/%3E%3C/g%3E%3C/svg%3E">
-    <meta name="theme-color" content="#0F4C3E">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='24' fill='%230E4C45'/%3E%3Cg fill='%23F0B429'%3E%3Crect x='26' y='55' width='11' height='18' rx='3.5'/%3E%3Crect x='44.5' y='42' width='11' height='31' rx='3.5'/%3E%3Crect x='63' y='26' width='11' height='47' rx='3.5'/%3E%3C/g%3E%3C/svg%3E">
+    <meta name="theme-color" content="#0E4C45">
 
     <!-- Preview do link no WhatsApp (Open Graph). É o cartão que o cliente
          vê antes de clicar — sem isto, o link chega "pelado". -->
@@ -24,9 +24,20 @@
     <meta name="description" content="Escolha o melhor horário e receba o link do Meet na hora.">
 
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Sora:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
+        /* O sistema interno segue com Inter. A tipografia da marca
+           (Sora + IBM Plex) é aplicada nas páginas que o CLIENTE vê. */
         body { font-family: 'Inter', sans-serif; }
+
+        .font-brand { font-family: 'Sora', sans-serif; }
+        .font-body  { font-family: 'IBM Plex Sans', sans-serif; }
+        .font-label { font-family: 'IBM Plex Mono', monospace; }
+
+        /* O amarelo do Tailwind não é o da marca — este é. */
+        .btn-brand { background-color: #F0B429; }
+        .btn-brand:hover { background-color: #D89F1E; }
+        .btn-brand:disabled:hover { background-color: #F0B429; }
     </style>
 <script type="importmap">
 {

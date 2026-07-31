@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Clock, Loader2, Video } from 'lucide-react';
-import { Logo } from './Logo';
+import { Logo, RNV_OFFWHITE } from './Logo';
 import {
   AvailabilityResponse,
   createBooking,
@@ -102,7 +102,10 @@ export function BookingPage({ token }: BookingPageProps) {
       : '';
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col items-center px-4 py-8">
+    <div
+      className="font-body min-h-screen flex flex-col items-center px-4 py-8"
+      style={{ backgroundColor: RNV_OFFWHITE }}
+    >
       <div className="w-full max-w-md">
         <header className="flex justify-center mb-6">
           <Logo />
@@ -133,7 +136,7 @@ export function BookingPage({ token }: BookingPageProps) {
           {stage === 'choosing' && availability && (
             <>
               <div className="mb-5 text-center">
-                <h1 className="text-xl font-black text-slate-800">
+                <h1 className="font-brand text-xl font-extrabold text-slate-800">
                   {availability.firstName ? `Olá, ${availability.firstName}!` : 'Vamos agendar?'}
                 </h1>
                 <p className="text-sm text-slate-500 mt-1">
@@ -183,7 +186,7 @@ export function BookingPage({ token }: BookingPageProps) {
                   type="button"
                   onClick={() => (isPersonal ? handleConfirm() : setStage('details'))}
                   disabled={submitting}
-                  className="mt-6 w-full py-3 rounded-xl bg-yellow-500 hover:bg-yellow-600 disabled:opacity-60 text-white font-black transition-colors flex items-center justify-center gap-2"
+                  className="mt-6 w-full py-3 rounded-xl btn-brand disabled:opacity-60 text-white font-black transition-colors flex items-center justify-center gap-2"
                 >
                   {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                   {submitting ? 'Confirmando…' : 'Confirmar reunião'}
@@ -198,7 +201,7 @@ export function BookingPage({ token }: BookingPageProps) {
 
           {stage === 'details' && (
             <>
-              <h1 className="text-xl font-black text-slate-800 mb-1">Seus dados</h1>
+              <h1 className="font-brand text-xl font-extrabold text-slate-800 mb-1">Seus dados</h1>
               <p className="text-sm text-slate-500 mb-5">{chosenLabel}</p>
 
               <div className="space-y-3">
@@ -263,7 +266,7 @@ export function BookingPage({ token }: BookingPageProps) {
                   type="button"
                   onClick={handleConfirm}
                   disabled={submitting || !name.trim() || !phone.trim() || !consent}
-                  className="flex-1 py-3 rounded-xl bg-yellow-500 hover:bg-yellow-600 disabled:opacity-50 text-white font-black transition-colors flex items-center justify-center gap-2"
+                  className="flex-1 py-3 rounded-xl btn-brand disabled:opacity-50 text-white font-black transition-colors flex items-center justify-center gap-2"
                 >
                   {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                   {submitting ? 'Confirmando…' : 'Confirmar reunião'}
@@ -275,7 +278,7 @@ export function BookingPage({ token }: BookingPageProps) {
           {stage === 'done' && (
             <div className="py-8 text-center space-y-3">
               <CheckCircle2 className="w-14 h-14 text-emerald-500 mx-auto" />
-              <h1 className="text-xl font-black text-slate-800">Reunião confirmada!</h1>
+              <h1 className="font-brand text-xl font-extrabold text-slate-800">Reunião confirmada!</h1>
               <p className="text-slate-600 font-semibold">{chosenLabel}</p>
               <div className="pt-2 text-sm text-slate-500 space-y-1.5">
                 <p className="flex items-center justify-center gap-1.5">

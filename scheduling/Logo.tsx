@@ -2,8 +2,12 @@ import React from 'react';
 
 // A logo da RNV desenhada em SVG (em vez de um PNG): escala sem borrar em
 // qualquer tela, não pesa no carregamento e serve também de favicon.
-export const RNV_GREEN = '#0F4C3E';
+//
+// Cores da paleta oficial da marca.
+export const RNV_GREEN = '#0E4C45';
 export const RNV_YELLOW = '#F0B429';
+export const RNV_INK = '#15201E';
+export const RNV_OFFWHITE = '#F4F2EE';
 
 interface LogoMarkProps {
   size?: number;
@@ -48,13 +52,13 @@ export function Logo({ tone = 'light', className = '' }: LogoProps) {
       <LogoMark size={44} />
       <div className="leading-none">
         <div
-          className="text-2xl font-black tracking-tight"
+          className="font-brand text-2xl font-extrabold tracking-tight"
           style={{ color: isDark ? '#FFFFFF' : RNV_GREEN }}
         >
           RNV
         </div>
         <div
-          className="text-[9px] font-medium tracking-[0.2em] mt-1"
+          className="font-label text-[9px] tracking-[0.18em] mt-1.5"
           style={{ color: isDark ? 'rgba(255,255,255,0.65)' : '#8A8A8A' }}
         >
           CONSULTORIA FINANCEIRA
