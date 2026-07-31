@@ -204,6 +204,67 @@ const firstName = (full: string): string => (full ?? "").trim().split(/\s+/)[0] 
 
 const newToken = () => crypto.randomUUID().replace(/-/g, "");
 
+const WEEKDAYS = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"];
+
+/** "quinta-feira, 13/08 às 15:00" — o texto que vai na confirmação. */
+function meetingLabel(instant: Date): string {
+  const c = civilParts(instant);
+  const weekday = WEEKDAYS[weekdayOf(toDayKey(instant))];
+  const suffix = weekday === "sábado" || weekday === "domingo" ? "" : "-feira";
+  return `${weekday}${suffix}, ${pad(c.day)}/${pad(c.month)} às ${pad(c.hour)}:${pad(c.minute)}`;
+}
+
+/** O papo.ai exige DDI + DDD + número. */
+const toWhatsApp = (digits: string | null): string | null => {
+  const clean = (digits ?? "").replace(/\D/g, "");
+  if (clean.length < 10) return null;
+  return clean.startsWith("55") ? clean : `55${clean}`;
+};
+
+/**
+ * Confirmação no WhatsApp do cliente, logo depois de agendar.
+ * Falhar aqui não desfaz nada — o agendamento já está gravado.
+ */
+async function sendConfirmation(supabase: any, input: {
+  appointmentId: string; name: string; phone: string | null;
+  email: string | null; startsAt: Date; manageToken: string;
+}): Promise<void> {
+  const url = Deno.env.get("PAPO_WEBHOOK_CONFIRMACAO_URL");
+  const siteUrl = (Deno.env.get("SITE_URL") ?? "").replace(/\/$/, "");
+  const phone = toWhatsApp(input.phone);
+  if (!url || !phone) return;
+
+  const payload = {
+    phone,
+    first_name: firstName(input.name),
+    full_name: input.name,
+    email: input.email ?? "",
+    meeting_label: meetingLabel(input.startsAt),
+    meeting_url: `${siteUrl}/r/${input.manageToken}`
+  };
+
+  let ok = false;
+  let detail: string | null = null;
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    ok = response.ok;
+    if (!ok) detail = `HTTP ${response.status}`;
+  } catch (e) {
+    detail = String(e);
+  }
+
+  await supabase.from("scheduling_notifications").insert({
+    kind: "confirmation",
+    appointment_id: input.appointmentId,
+    ok,
+    detail
+  });
+}
+
 // ------------------------------------------------------------- Google
 // Se o Google falhar, o AGENDAMENTO NÃO FALHA: grava sem link, registra o
 // erro e o cliente vê "o link chega no WhatsApp". Perder uma reunião
@@ -597,6 +658,17 @@ Deno.serve(async (req: Request) => {
       meet_attempts: 1,
       meet_error: meet.error ?? null
     }).eq("id", created.id);
+
+    // Confirmação no WhatsApp. Vai depois do Meet de propósito, para a
+    // mensagem já poder levar o link da videochamada.
+    await sendConfirmation(supabase, {
+      appointmentId: created.id,
+      name: name || "Cliente",
+      phone,
+      email,
+      startsAt,
+      manageToken
+    });
 
     return json({
       ok: true,

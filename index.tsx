@@ -33,6 +33,11 @@ function pickPage() {
   if (segments[0] === 'google-callback') {
     return <GoogleCallbackPage />;
   }
+  // /dia/2026-08-13 — o link do resumo das 21h. Abre o sistema (com login)
+  // direto na Lista do Dia daquele dia.
+  if (segments[0] === 'dia' && /^\d{4}-\d{2}-\d{2}$/.test(segments[1] ?? '')) {
+    return <App initialDay={segments[1]} />;
+  }
   return <App />;
 }
 

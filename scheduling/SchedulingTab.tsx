@@ -31,12 +31,14 @@ const EMPTY: SchedulingData = {
 interface SchedulingTabProps {
   clients: Client[];
   role: UserRole;
+  /** Dia vindo do link do resumo das 21h — abre direto na Lista do Dia. */
+  initialDay?: string;
 }
 
-export function SchedulingTab({ clients, role }: SchedulingTabProps) {
+export function SchedulingTab({ clients, role, initialDay }: SchedulingTabProps) {
   const [now, setNow] = useState(() => new Date());
-  const [anchorDay, setAnchorDay] = useState<DayKey>(() => toDayKey(new Date()));
-  const [subTab, setSubTab] = useState<SubTab>('week');
+  const [anchorDay, setAnchorDay] = useState<DayKey>(() => initialDay || toDayKey(new Date()));
+  const [subTab, setSubTab] = useState<SubTab>(initialDay ? 'day' : 'week');
   const [data, setData] = useState<SchedulingData>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Appointment | null>(null);

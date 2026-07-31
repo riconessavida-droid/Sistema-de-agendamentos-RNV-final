@@ -119,8 +119,13 @@ const toMonthKey = (d: Date) =>
 const addMonths = (base: Date, delta: number) =>
   new Date(base.getFullYear(), base.getMonth() + delta, 1);
 
-const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<TabType>('overview');
+interface AppProps {
+  /** Dia (AAAA-MM-DD) para abrir direto na Lista do Dia — vem do link do resumo das 21h. */
+  initialDay?: string;
+}
+
+const App: React.FC<AppProps> = ({ initialDay }) => {
+  const [activeTab, setActiveTab] = useState<TabType>(initialDay ? 'scheduling' : 'overview');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [clients, setClients] = useState<Client[]>([]);
   const [loadingClients, setLoadingClients] = useState(false);
@@ -2493,7 +2498,7 @@ const billingData = useMemo(() => {
         {/* ===== ABA: CONCILIAÇÃO (eAgenda) ===== */}
         {/* ===== ABA: AGENDA (sistema de agendamento próprio) ===== */}
         {activeTab === 'scheduling' && (
-          <SchedulingTab clients={clients} role={currentUser.role} />
+          <SchedulingTab clients={clients} role={currentUser.role} initialDay={initialDay} />
         )}
 
         {activeTab === 'conciliation' && (
