@@ -19,7 +19,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const SCOPE = "https://www.googleapis.com/auth/calendar";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
-const USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo";
+// O id do calendário principal É o e-mail da conta. Usar isto em vez do
+// endpoint de "userinfo" evita pedir uma permissão a mais só para mostrar
+// qual conta ficou conectada.
+const PRIMARY_CALENDAR_URL = "https://www.googleapis.com/calendar/v3/calendars/primary";
 
 // O cliente do Supabase (functions.invoke) manda apikey e x-client-info
 // além dos óbvios. Faltando qualquer um aqui, o navegador barra a chamada
@@ -110,10 +113,10 @@ Deno.serve(async (req: Request) => {
 
     let email: string | null = null;
     try {
-      const info = await fetch(USERINFO_URL, {
+      const info = await fetch(PRIMARY_CALENDAR_URL, {
         headers: { authorization: `Bearer ${tokens.access_token}` }
       });
-      if (info.ok) email = (await info.json())?.email ?? null;
+      if (info.ok) email = (await info.json())?.id ?? null;
     } catch { /* o e-mail é só informativo */ }
 
     const { error } = await supabase.from("google_credentials").upsert({

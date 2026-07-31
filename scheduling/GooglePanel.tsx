@@ -105,7 +105,9 @@ export function GooglePanel({ canEdit }: GooglePanelProps) {
             <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm">
               <CheckCircle2 className="w-4 h-4 shrink-0" />
               <span>
-                Conectado {status.email ? <>como <strong>{status.email}</strong></> : ''}.
+                {status.email
+                  ? <>Conectado como <strong>{status.email}</strong>.</>
+                  : <>Conectado à sua conta Google.</>}
               </span>
             </div>
 
