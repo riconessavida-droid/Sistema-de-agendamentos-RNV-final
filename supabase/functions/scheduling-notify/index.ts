@@ -85,6 +85,15 @@ function meetingLabel(instant: Date): string {
 
 const firstName = (full: string) => (full ?? "").trim().split(/\s+/)[0] ?? "";
 
+// Valor colado num segredo quase sempre traz espaço ou quebra de linha
+// invisível junto, e a Meta REJEITA parâmetro de template com quebra de
+// linha. Tudo que vai para o WhatsApp passa por aqui antes.
+const cleanText = (value: string | null | undefined): string =>
+  (value ?? "").replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim();
+
+const cleanUrl = (value: string | null | undefined): string =>
+  (value ?? "").replace(/\s+/g, "").replace(/\/+$/, "");
+
 /** O papo.ai exige DDI + DDD + número. */
 const toWhatsApp = (digits: string | null): string | null => {
   const clean = (digits ?? "").replace(/\D/g, "");
@@ -110,10 +119,10 @@ Deno.serve(async (req: Request) => {
   let body: any = {};
   try { body = await req.json(); } catch { /* cron chama sem corpo */ }
 
-  const vesperaUrl = Deno.env.get("PAPO_WEBHOOK_VESPERA_URL");
-  const resumoUrl = Deno.env.get("PAPO_WEBHOOK_RESUMO_URL");
-  const adminPhone = Deno.env.get("ADMIN_PHONE");
-  const siteUrl = (Deno.env.get("SITE_URL") ?? "").replace(/\/$/, "");
+  const vesperaUrl = cleanUrl(Deno.env.get("PAPO_WEBHOOK_VESPERA_URL"));
+  const resumoUrl = cleanUrl(Deno.env.get("PAPO_WEBHOOK_RESUMO_URL"));
+  const adminPhone = cleanText(Deno.env.get("ADMIN_PHONE"));
+  const siteUrl = cleanUrl(Deno.env.get("SITE_URL"));
 
   // Sem as URLs configuradas, roda em seco automaticamente — nunca falha
   // silenciosamente nem manda para lugar nenhum.
@@ -176,11 +185,11 @@ Deno.serve(async (req: Request) => {
 
     const payload = {
       phone,
-      first_name: firstName(name),
-      full_name: name,
-      email: meeting.attendee_email ?? "",
-      meeting_label: meetingLabel(startsAt),
-      meeting_url: `${siteUrl}/r/${meeting.manage_token}`
+      first_name: cleanText(firstName(name)),
+      full_name: cleanText(name),
+      email: cleanText(meeting.attendee_email),
+      meeting_label: cleanText(meetingLabel(startsAt)),
+      meeting_url: cleanUrl(`${siteUrl}/r/${meeting.manage_token}`)
     };
 
     if (dryRun) {
@@ -202,14 +211,14 @@ Deno.serve(async (req: Request) => {
   const times = meetings.map(m => toTimeKey(new Date(m.starts_at))).sort();
 
   const summaryPayload = {
-    phone: toWhatsApp(adminPhone ?? "") ?? "",
+    phone: toWhatsApp(adminPhone) ?? "",
     first_name: "Eduardo",
     full_name: "Eduardo Stetner",
     summary_date: `${tomorrow.slice(8)}/${tomorrow.slice(5, 7)}`,
     meeting_count: String(meetings.length),
     first_time: times[0],
     last_time: times[times.length - 1],
-    day_url: `${siteUrl}/dia/${tomorrow}`
+    day_url: cleanUrl(`${siteUrl}/dia/${tomorrow}`)
   };
 
   let summary: any = { dryRun: true, payload: summaryPayload };

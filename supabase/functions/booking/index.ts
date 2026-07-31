@@ -202,6 +202,16 @@ const normalizePhone = (raw: string): string => {
 
 const firstName = (full: string): string => (full ?? "").trim().split(/\s+/)[0] ?? "";
 
+// Valor colado num segredo ou digitado num cadastro quase sempre traz
+// espaço ou quebra de linha invisível junto. A Meta REJEITA parâmetro de
+// template que contenha quebra de linha, então tudo que vai para o
+// WhatsApp passa por aqui antes.
+const cleanText = (value: string | null | undefined): string =>
+  (value ?? "").replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim();
+
+const cleanUrl = (value: string | null | undefined): string =>
+  (value ?? "").replace(/\s+/g, "").replace(/\/+$/, "");
+
 const newToken = () => crypto.randomUUID().replace(/-/g, "");
 
 const WEEKDAYS = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"];
@@ -229,18 +239,18 @@ async function sendConfirmation(supabase: any, input: {
   appointmentId: string; name: string; phone: string | null;
   email: string | null; startsAt: Date; manageToken: string;
 }): Promise<void> {
-  const url = Deno.env.get("PAPO_WEBHOOK_CONFIRMACAO_URL");
-  const siteUrl = (Deno.env.get("SITE_URL") ?? "").replace(/\/$/, "");
+  const url = cleanUrl(Deno.env.get("PAPO_WEBHOOK_CONFIRMACAO_URL"));
+  const siteUrl = cleanUrl(Deno.env.get("SITE_URL"));
   const phone = toWhatsApp(input.phone);
   if (!url || !phone) return;
 
   const payload = {
     phone,
-    first_name: firstName(input.name),
-    full_name: input.name,
-    email: input.email ?? "",
-    meeting_label: meetingLabel(input.startsAt),
-    meeting_url: `${siteUrl}/r/${input.manageToken}`
+    first_name: cleanText(firstName(input.name)),
+    full_name: cleanText(input.name),
+    email: cleanText(input.email),
+    meeting_label: cleanText(meetingLabel(input.startsAt)),
+    meeting_url: cleanUrl(`${siteUrl}/r/${input.manageToken}`)
   };
 
   let ok = false;
