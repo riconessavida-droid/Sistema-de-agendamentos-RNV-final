@@ -21,9 +21,12 @@ const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo";
 
+// O cliente do Supabase (functions.invoke) manda apikey e x-client-info
+// além dos óbvios. Faltando qualquer um aqui, o navegador barra a chamada
+// no preflight e o erro aparece como "CORS policy" no console.
 const CORS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-headers": "content-type, authorization",
+  "access-control-allow-headers": "authorization, x-client-info, apikey, content-type",
   "access-control-allow-methods": "POST, OPTIONS"
 };
 

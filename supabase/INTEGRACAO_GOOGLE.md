@@ -139,6 +139,10 @@ O app ficou em modo "Teste". Volte no passo **1.4** e publique.
 O endereço no Google Cloud está diferente do que o sistema usa. Copie de novo
 pelo botão da aba Google e cole exatamente igual.
 
+**"blocked by CORS policy" no console, ou "não consegui falar com a função"**
+A função publicada está desatualizada. Recole o conteúdo de
+`supabase/functions/google-oauth/index.ts` e faça Deploy de novo.
+
 **"O Google não devolveu a autorização permanente"**
 A conta já tinha autorizado antes. Vá em
 [myaccount.google.com/permissions](https://myaccount.google.com/permissions),

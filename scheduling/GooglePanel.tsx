@@ -54,10 +54,12 @@ export function GooglePanel({ canEdit }: GooglePanelProps) {
     setBusy(false);
 
     if (!response?.ok) {
+      // Mostra o motivo real: um erro genérico aqui manda você procurar no
+      // lugar errado (já aconteceu com um problema de CORS).
       setMessage(
         response?.error === 'missing_client_id'
           ? 'Falta cadastrar o segredo GOOGLE_CLIENT_ID no Supabase.'
-          : 'Não consegui iniciar a conexão com o Google.'
+          : `Não consegui falar com a função google-oauth: ${response?.error ?? 'erro desconhecido'}`
       );
       return;
     }

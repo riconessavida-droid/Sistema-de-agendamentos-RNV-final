@@ -24,7 +24,7 @@ const MS_PER_HOUR = 3_600_000;
 
 const CORS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-headers": "content-type",
+  "access-control-allow-headers": "authorization, x-client-info, apikey, content-type",
   "access-control-allow-methods": "POST, OPTIONS"
 };
 
