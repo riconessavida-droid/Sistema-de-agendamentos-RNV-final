@@ -177,7 +177,15 @@ Deno.serve(async (req: Request) => {
     const nextMonthKey = monthKeyFromUTC(nextUTC);
     const nextEntry = sbm[nextMonthKey];
 
-    if (nextEntry?.customDate != null || nextEntry?.notified === true) continue;
+    // Só a DATA MARCADA tira o cliente da fila.
+    //
+    // O flag `notified` não é mais consultado aqui: ele nasceu do fluxo
+    // manual (a assistente avisava e clicava em "Avisar") e passou a
+    // silenciar o automático — cliente sem data marcada ficava invisível
+    // só porque alguém clicou num botão. Agora ele é CONSEQUÊNCIA do
+    // envio, não condição para ele: quem manda marcar é a função, mais
+    // abaixo. O que evita mensagem repetida é o reminder_log.
+    if (nextEntry?.customDate != null) continue;
 
     // Quem PASSOU da data prevista continua sendo cobrado por mais 7 dias.
     //
@@ -241,6 +249,13 @@ Deno.serve(async (req: Request) => {
           { client_id: d.client.id, month_key: d.monthKey, reminder_type: d.type, status: "sent", detail: text.slice(0, 200) },
           { onConflict: "client_id,month_key,reminder_type" },
         );
+
+        // Acende o "Avisado ✓" na tela sozinho. Antes alguém tinha que
+        // clicar; agora o botão mostra o que o sistema realmente fez.
+        const sbm = { ...(d.client.status_by_month ?? {}) };
+        sbm[d.monthKey] = { status: "PENDING", ...(sbm[d.monthKey] ?? {}), notified: true };
+        await supabase.from("clients").update({ status_by_month: sbm }).eq("id", d.client.id);
+
         details.push({ client: d.client.name, type: d.type, status: "sent" });
       } else {
         summary.failed++;
