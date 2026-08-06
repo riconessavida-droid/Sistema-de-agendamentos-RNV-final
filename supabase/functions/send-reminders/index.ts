@@ -132,6 +132,22 @@ Deno.serve(async (req: Request) => {
   const { data: logRaw } = await supabase.from("reminder_log").select("client_id, month_key, reminder_type");
   const alreadySent = new Set((logRaw ?? []).map((r: any) => `${r.client_id}|${r.month_key}|${r.reminder_type}`));
 
+  // Quem JÁ TEM reunião marcada para frente não recebe cobrança para marcar.
+  //
+  // Antes olhávamos só o mês previsto: se a próxima era setembro e o
+  // cliente agendava para 30/08, a data caía em agosto, setembro ficava
+  // vazio e ele recebia "ainda não vi seu agendamento" mesmo tendo
+  // agendado. Na virada de mês isso aconteceria toda hora.
+  const { data: futuros } = await supabase
+    .from("appointments")
+    .select("client_id")
+    .eq("status", "CONFIRMED")
+    .gte("starts_at", new Date().toISOString());
+
+  const jaAgendou = new Set(
+    (futuros ?? []).map((a: any) => a.client_id).filter(Boolean),
+  );
+
   const isInactive = (c: any) => Object.values(c.status_by_month ?? {}).some((s: any) => INACTIVE.has(s?.status));
 
   type Due = { client: any; type: "7d" | "3d"; monthKey: string; daysUntil: number; to: string | null };
@@ -139,6 +155,7 @@ Deno.serve(async (req: Request) => {
 
   for (const c of clients) {
     if (isInactive(c)) continue;
+    if (jaAgendou.has(c.id)) continue;
     const total = 5 + (c.extra_meetings ?? 0);
     const cycle = getNextMonths(c.start_month_year, total);
     const sbm = c.status_by_month ?? {};
