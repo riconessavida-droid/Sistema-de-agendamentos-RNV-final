@@ -1,5 +1,9 @@
 {
   "rewrites": [
-    { "source": "/((?!assets/).*)", "destination": "/index.html" }
+    {
+      "comment": "Rotas do app caem no index.html (SPA). Qualquer caminho com extensão de arquivo — og.png, favicon, assets — é servido como arquivo de verdade; sem isso o WhatsApp recebe HTML no lugar da imagem de preview e o link vai 'seco'.",
+      "source": "/((?!assets/|.*\\.[A-Za-z0-9]{2,5}$).*)",
+      "destination": "/index.html"
+    }
   ]
 }
