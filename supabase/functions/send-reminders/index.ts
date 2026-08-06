@@ -179,9 +179,17 @@ Deno.serve(async (req: Request) => {
 
     if (nextEntry?.customDate != null || nextEntry?.notified === true) continue;
 
+    // Quem PASSOU da data prevista continua sendo cobrado por mais 7 dias.
+    //
+    // Antes a cobrança parava no dia da data prevista: quem estava atrasado
+    // — justamente quem mais precisa ser cobrado — sumia do radar para
+    // sempre. O dedupe do reminder_log garante que, mesmo com a janela
+    // maior, a mensagem sai UMA VEZ SÓ.
+    const ATRASO_MAX = 7;
+
     let type: "7d" | "3d" | null = null;
     if (daysUntil >= 4 && daysUntil <= 7) type = "7d";
-    else if (daysUntil >= 1 && daysUntil <= 3) type = "3d";
+    else if (daysUntil >= -ATRASO_MAX && daysUntil <= 3) type = "3d";
     if (!type) continue;
 
     if (alreadySent.has(`${c.id}|${nextMonthKey}|${type}`)) continue;
