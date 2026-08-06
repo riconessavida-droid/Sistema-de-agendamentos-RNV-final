@@ -58,13 +58,62 @@ function toWhatsApp(raw: string): string | null {
   return "55" + d;
 }
 
+// Valor colado num segredo quase sempre traz espaço ou quebra de linha
+// invisível junto, e a Meta REJEITA parâmetro de template com quebra de
+// linha (erro 132018). Tudo que vai para o WhatsApp passa por aqui.
+const cleanText = (v: string | null | undefined) =>
+  (v ?? "").replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim();
+const cleanUrl = (v: string | null | undefined) =>
+  (v ?? "").replace(/\s+/g, "").replace(/\/+$/, "");
+
+const newToken = () =>
+  (crypto.randomUUID() + crypto.randomUUID()).replace(/-/g, "").slice(0, 32);
+
+/**
+ * O link PESSOAL de agendamento do cliente.
+ *
+ * É o que substitui o link fixo do eAgenda que ficava escrito dentro do
+ * template: como o token identifica o cliente, a página já sabe quem ele
+ * é, não pede nada e marca a data ideal dos 30 dias.
+ *
+ * Reaproveita o link existente; só cria na primeira vez.
+ */
+async function bookingUrlFor(
+  supabase: any, clientId: string, siteUrl: string,
+): Promise<string> {
+  if (!siteUrl) return "";
+
+  const { data: existing } = await supabase
+    .from("booking_links")
+    .select("token")
+    .eq("client_id", clientId)
+    .eq("active", true)
+    .is("fit_in_starts_at", null)
+    .limit(1);
+
+  let token: string | undefined = existing?.[0]?.token;
+
+  if (!token) {
+    token = newToken();
+    const { error } = await supabase
+      .from("booking_links")
+      .insert({ token, client_id: clientId });
+    // Se não deu para criar o link pessoal, o link geral ainda agenda —
+    // só volta a exigir conciliação depois. Melhor que não mandar nada.
+    if (error) return `${siteUrl}/agendar`;
+  }
+
+  return `${siteUrl}/agendar/${token}`;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
 
-  const url7d = Deno.env.get("REMINDER_WEBHOOK_7D_URL");
-  const url3d = Deno.env.get("REMINDER_WEBHOOK_3D_URL");
+  const url7d = cleanUrl(Deno.env.get("REMINDER_WEBHOOK_7D_URL"));
+  const url3d = cleanUrl(Deno.env.get("REMINDER_WEBHOOK_3D_URL"));
   const authHeader = Deno.env.get("REMINDER_WEBHOOK_TOKEN"); // opcional
+  const siteUrl = cleanUrl(Deno.env.get("SITE_URL"));
   let dryRun = !url7d && !url3d;
   try { const b = await req.json(); if (b?.dryRun === true) dryRun = true; } catch { /* sem body */ }
 
@@ -135,10 +184,13 @@ Deno.serve(async (req: Request) => {
 
     const payload = {
       phone: d.to,
-      first_name: firstName(d.client.name),
-      full_name: d.client.name,
+      first_name: cleanText(firstName(d.client.name)),
+      full_name: cleanText(d.client.name),
       reminder_type: d.type,
       month_key: d.monthKey,
+      // O link agora vai como parâmetro do template, não escrito dentro
+      // dele — por isso trocar de domínio nunca mais exige reaprovação.
+      booking_url: await bookingUrlFor(supabase, d.client.id, siteUrl),
     };
 
     if (dryRun) {
