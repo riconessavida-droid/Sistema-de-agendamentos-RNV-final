@@ -210,6 +210,28 @@ Deno.serve(async (req: Request) => {
   // -------------------------------------------------------- resumo do dia
   const times = meetings.map(m => toTimeKey(new Date(m.starts_at))).sort();
 
+  /**
+   * "08:30 Livia Helena · 09:30 Lucas Coppedê · 14:00 Samara Oliveira"
+   *
+   * Vai tudo numa linha só de propósito: a Meta REJEITA parâmetro de
+   * template que contenha quebra de linha. O separador " · " é o que mais
+   * se aproxima de uma lista sem quebrar a regra.
+   *
+   * Só os dois primeiros nomes, para a linha não estourar num dia cheio.
+   */
+  const shortName = (full: string): string =>
+    cleanText(full).split(" ").filter(Boolean).slice(0, 2).join(" ");
+
+  const meetingList = meetings
+    .slice()
+    .sort((a, b) => String(a.starts_at).localeCompare(String(b.starts_at)))
+    .map(m => {
+      const client = m.client_id ? clientById.get(m.client_id) : null;
+      const name = shortName(client?.name ?? m.attendee_name ?? "sem nome");
+      return `${toTimeKey(new Date(m.starts_at))} ${name}`;
+    })
+    .join(" · ");
+
   const summaryPayload = {
     phone: toWhatsApp(adminPhone) ?? "",
     first_name: "Eduardo",
@@ -218,6 +240,10 @@ Deno.serve(async (req: Request) => {
     meeting_count: String(meetings.length),
     first_time: times[0],
     last_time: times[times.length - 1],
+    // A lista com horário e nome de cada reunião. Os campos acima
+    // continuam sendo enviados para o template atual não quebrar
+    // enquanto o novo não é aprovado.
+    meeting_list: cleanText(meetingList),
     day_url: cleanUrl(`${siteUrl}/dia/${tomorrow}`)
   };
 
