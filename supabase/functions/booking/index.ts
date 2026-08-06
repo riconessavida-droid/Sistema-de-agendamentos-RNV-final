@@ -202,6 +202,71 @@ const normalizePhone = (raw: string): string => {
 
 const firstName = (full: string): string => (full ?? "").trim().split(/\s+/)[0] ?? "";
 
+const INACTIVE_STATUSES = new Set(["CLOSED_CONTRACT", "CANCELLED_EARLY"]);
+
+const normalizeName = (s: string): string =>
+  (s ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/\s+/g, " ").trim();
+
+const firstTwoNames = (s: string): string =>
+  normalizeName(s).split(" ").filter(Boolean).slice(0, 2).join(" ");
+
+const isInactive = (client: any): boolean =>
+  Object.values(client?.status_by_month ?? {})
+    .some((s: any) => INACTIVE_STATUSES.has(s?.status));
+
+/**
+ * Descobre de quem é o agendamento feito pelo LINK GERAL.
+ *
+ * O link pessoal não precisa disto — o token já diz quem é. Mas quando o
+ * Eduardo manda o link geral para um cliente que já existe (ele pede o
+ * link no meio do mês, por exemplo), a data tem que cair na ficha certa
+ * em vez de criar um estranho. É a mesma conciliação que o eAgenda fazia,
+ * e ela só decide quando tem CERTEZA: telefone, e-mail ou nome que batem
+ * com EXATAMENTE UM cliente ativo. Empate ou nenhum resultado deixa em
+ * branco, e a aba Conciliação resolve depois.
+ */
+async function findClientId(
+  supabase: any, phone: string, email: string | null, name: string,
+): Promise<string | null> {
+  const { data: clients } = await supabase
+    .from("clients")
+    .select("id, name, phone_digits, email, status_by_month");
+
+  const ativos = (clients ?? []).filter((c: any) => !isInactive(c));
+
+  const soUm = (lista: any[]): string | null =>
+    lista.length === 1 ? lista[0].id : null;
+
+  if (phone) {
+    const porTelefone = ativos.filter(
+      (c: any) => normalizePhone(c.phone_digits ?? "") === phone,
+    );
+    const achou = soUm(porTelefone);
+    if (achou) return achou;
+  }
+
+  if (email) {
+    const alvo = email.toLowerCase().trim();
+    const porEmail = ativos.filter(
+      (c: any) => (c.email ?? "").toLowerCase().trim() === alvo,
+    );
+    const achou = soUm(porEmail);
+    if (achou) return achou;
+  }
+
+  const alvoNome = firstTwoNames(name);
+  if (alvoNome) {
+    const porNome = ativos.filter(
+      (c: any) => firstTwoNames(c.name ?? "") === alvoNome,
+    );
+    const achou = soUm(porNome);
+    if (achou) return achou;
+  }
+
+  return null;
+}
+
 // Valor colado num segredo ou digitado num cadastro quase sempre traz
 // espaço ou quebra de linha invisível junto. A Meta REJEITA parâmetro de
 // template que contenha quebra de linha, então tudo que vai para o
@@ -590,6 +655,9 @@ Deno.serve(async (req: Request) => {
       if (already && already.length > 0) {
         return json({ ok: false, error: "already_booked" }, 409);
       }
+
+      // Cliente que já existe entra na ficha dele, não vira um estranho.
+      clientId = await findClientId(supabase, phone, email, name);
     }
 
     // O horário ainda é oferecível? (protege contra payload adulterado)
