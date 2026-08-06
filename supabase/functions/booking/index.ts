@@ -520,14 +520,35 @@ Deno.serve(async (req: Request) => {
     };
   };
 
+  /**
+   * Horários já ocupados — dos DOIS sistemas.
+   *
+   * Enquanto o eAgenda não é desligado, quem agenda lá também ocupa o
+   * horário aqui. Ler a tabela dele na hora, em vez de depender da
+   * importação manual de bloqueios, é o que impede duas reuniões no mesmo
+   * horário durante a convivência. Depois que o eAgenda sair do ar essa
+   * tabela simplesmente para de crescer, e a consulta não devolve nada.
+   */
   const takenInstants = async (fromIso: string, toIso: string) => {
-    const { data } = await supabase
-      .from("appointments")
-      .select("starts_at")
-      .eq("status", "CONFIRMED")
-      .gte("starts_at", fromIso)
-      .lte("starts_at", toIso);
-    return new Set((data ?? []).map((r: any) => new Date(r.starts_at).getTime()));
+    const [proprios, eagenda] = await Promise.all([
+      supabase
+        .from("appointments")
+        .select("starts_at")
+        .eq("status", "CONFIRMED")
+        .gte("starts_at", fromIso)
+        .lte("starts_at", toIso),
+      supabase
+        .from("eagenda_bookings")
+        .select("start_datetime")
+        .in("conciliation_status", ["MATCHED", "PENDING"])
+        .gte("start_datetime", fromIso)
+        .lte("start_datetime", toIso),
+    ]);
+
+    const ocupados = new Set<number>();
+    for (const r of proprios.data ?? []) ocupados.add(new Date(r.starts_at).getTime());
+    for (const r of eagenda.data ?? []) ocupados.add(new Date(r.start_datetime).getTime());
+    return ocupados;
   };
 
   // ------------------------------------------------------- availability
