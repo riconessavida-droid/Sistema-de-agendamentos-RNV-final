@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Gerar og.png — RNV</title>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@700;800&family=IBM+Plex+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+  body { font-family: system-ui, sans-serif; background:#F4F2EE; color:#15201E;
+         margin:0; padding:32px; display:flex; flex-direction:column;
+         align-items:center; gap:20px; }
+  h1 { font-size:20px; margin:0; }
+  p  { margin:0; color:#5a5a5a; font-size:14px; text-align:center; max-width:640px; }
+  canvas { width:600px; height:315px; border-radius:12px;
+           box-shadow:0 8px 24px rgba(0,0,0,.15); }
+  button { background:#F0B429; color:#fff; border:0; padding:14px 28px;
+           border-radius:12px; font-size:16px; font-weight:800; cursor:pointer; }
+  button:hover { background:#D89F1E; }
+  code { background:#e8e6e1; padding:2px 6px; border-radius:4px; }
+</style>
+</head>
+<body>
+  <h1>Imagem de preview do link (og.png)</h1>
+  <p>Confira a prévia abaixo e clique no botão. O arquivo <code>og.png</code> vai
+     para a sua pasta de Downloads — depois é só mover para
+     <code>Sistema-de-agendamentos-RNV-final\public\</code></p>
+
+  <canvas id="c" width="1200" height="630"></canvas>
+  <button onclick="baixar()">Baixar og.png</button>
+
+<script>
+const VERDE   = '#0E4C45';
+const AMARELO = '#F0B429';
+const BRANCO  = '#FFFFFF';
+const CINZA   = 'rgba(255,255,255,0.62)';
+
+function retanguloArredondado(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y,     x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x,     y + h, r);
+  ctx.arcTo(x,     y + h, x,     y,     r);
+  ctx.arcTo(x,     y,     x + w, y,     r);
+  ctx.closePath();
+  ctx.fill();
+}
+
+// O canvas não tem espaçamento entre letras confiável em todo navegador,
+// então o subtítulo é desenhado caractere por caractere.
+function textoEspacado(ctx, texto, x, y, espaco) {
+  let cursor = x;
+  for (const ch of texto) {
+    ctx.fillText(ch, cursor, y);
+    cursor += ctx.measureText(ch).width + espaco;
+  }
+  return cursor - x;
+}
+
+function desenhar() {
+  const ctx = document.getElementById('c').getContext('2d');
+
+  ctx.fillStyle = VERDE;
+  ctx.fillRect(0, 0, 1200, 630);
+
+  // Símbolo: quadrado amarelo com as três barras (mesma proporção do SVG).
+  const LADO = 190, X0 = 268, Y0 = (630 - LADO) / 2;
+  const e = LADO / 100;
+
+  ctx.fillStyle = AMARELO;
+  retanguloArredondado(ctx, X0, Y0, LADO, LADO, 24 * e);
+
+  ctx.fillStyle = VERDE;
+  const barras = [[26, 55, 11, 18], [44.5, 42, 11, 31], [63, 26, 11, 47]];
+  for (const [bx, by, bw, bh] of barras) {
+    retanguloArredondado(ctx, X0 + bx * e, Y0 + by * e, bw * e, bh * e, 3.5 * e);
+  }
+
+  const TEXTO_X = X0 + LADO + 46;
+
+  ctx.fillStyle = BRANCO;
+  ctx.font = '800 116px Sora, system-ui, sans-serif';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText('RNV', TEXTO_X, 330);
+
+  ctx.fillStyle = CINZA;
+  ctx.font = '400 27px "IBM Plex Mono", ui-monospace, monospace';
+  textoEspacado(ctx, 'CONSULTORIA FINANCEIRA', TEXTO_X + 4, 382, 5.5);
+}
+
+function baixar() {
+  document.getElementById('c').toBlob(blob => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'og.png';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }, 'image/png');
+}
+
+// Espera as fontes carregarem para o texto não sair na fonte errada.
+document.fonts.ready.then(desenhar);
+setTimeout(desenhar, 1500);
+</script>
+</body>
+</html>
