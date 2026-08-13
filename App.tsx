@@ -1751,12 +1751,12 @@ const billingData = useMemo(() => {
     item: DayReminderItem,
     type: ReminderType,
     day: Date
-  ): { state: 'sent' | 'queued' | 'missing'; at: string | null } => {
+  ): { state: 'sent' | 'queued' | 'late' | 'missing'; at: string | null } => {
     const entry = reminderLog.find(
       r => r.clientId === item.client.id && r.monthKey === item.monthKey && r.reminderType === type
     );
 
-    if (entry) {
+    if (entry && entry.status === 'sent') {
       const at = new Date(entry.createdAt);
       return {
         state: 'sent',
@@ -1769,9 +1769,15 @@ const billingData = useMemo(() => {
     const beforeDispatch = day.getTime() === today.getTime() && new Date().getHours() < 10;
     if (isFuture || beforeDispatch) return { state: 'queued', at: null };
 
-    if (day.getTime() < CHECK_ERA_START.getTime()) return { state: 'queued', at: null };
-
-    return { state: 'missing', at: null };
+    // Dia que já passou e o lembrete não saiu.
+    //
+    // Não é "sai às 10h" — isso já passou — e também não é caso perdido:
+    // a cobrança de 3 dias vale até 7 dias DEPOIS da data prevista, então
+    // esse cliente continua na fila e o sistema ainda vai mandar sozinho
+    // no próximo disparo. Dizer "sai às 10h" aqui fez o Eduardo concluir
+    // que a assistente teria de mandar na mão. É 'late': o sistema
+    // resolve, ela só acompanha.
+    return { state: day.getTime() < CHECK_ERA_START.getTime() ? 'late' : 'missing', at: null };
   };
 
   const formatPhone = (digits: string): string => {
@@ -1862,16 +1868,26 @@ const billingData = useMemo(() => {
 
   // Os números que a assistente bate contra o papo.ai antes de abrir
   // cliente por cliente: se "Enviadas hoje" fecha, a conferência acabou.
-  const contagemHoje = (['3d', '7d'] as ReminderType[]).reduce(
-    (acc, type) => {
-      const lista = type === '3d' ? totalHoje.tres : totalHoje.sete;
-      lista.forEach(item => {
-        const { state } = reminderStateOf(item, type, today);
-        acc[state] += 1;
+  // Varre a janela inteira, não só hoje: o cliente atrasado aparece no dia
+  // em que o lembrete deveria ter saído, mas quem age é o disparo de hoje.
+  // Contar só "hoje" esconderia justamente quem mais precisa de atenção.
+  const contagem = days.reduce(
+    (acc, d) => {
+      const doDia = getDayReminders(d);
+      (['3d', '7d'] as ReminderType[]).forEach(type => {
+        const lista = type === '3d' ? doDia.tres : doDia.sete;
+        lista.forEach(item => {
+          const { state } = reminderStateOf(item, type, d);
+          const isHoje = d.getTime() === today.getTime();
+          if (state === 'sent' && isHoje) acc.sent += 1;
+          else if (state === 'queued' && isHoje) acc.queued += 1;
+          else if (state === 'missing') acc.missing += 1;
+          else if (state === 'late') acc.late += 1;
+        });
       });
       return acc;
     },
-    { sent: 0, queued: 0, missing: 0 }
+    { sent: 0, queued: 0, missing: 0, late: 0 }
   );
 
   /**
@@ -1889,6 +1905,8 @@ const billingData = useMemo(() => {
       ? 'bg-emerald-50 border-emerald-200'
       : state === 'missing'
       ? 'bg-red-50 border-red-300'
+      : state === 'late'
+      ? 'bg-amber-50 border-amber-200'
       : isTres
       ? 'bg-red-50/60 border-red-100'
       : 'bg-yellow-50/60 border-yellow-100';
@@ -1942,6 +1960,11 @@ const billingData = useMemo(() => {
               ⏳ Sai às 10h
             </span>
           )}
+          {state === 'late' && (
+            <span className="text-[9px] font-black uppercase tracking-wider text-amber-700 bg-amber-100 px-2 py-1 rounded-md">
+              ⏳ Atrasado — na fila de hoje
+            </span>
+          )}
           {state === 'missing' && (
             <span className="text-[9px] font-black uppercase tracking-wider text-red-600 bg-red-100 px-2 py-1 rounded-md">
               ⚠️ Não enviado
@@ -1980,16 +2003,22 @@ const billingData = useMemo(() => {
         <div className="flex gap-3 flex-wrap">
           <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200 text-center min-w-[100px]">
             <p className="text-[10px] font-black text-emerald-700 uppercase tracking-widest leading-none mb-1">Enviadas hoje</p>
-            <p className="text-3xl font-black text-emerald-600">{contagemHoje.sent}</p>
+            <p className="text-3xl font-black text-emerald-600">{contagem.sent}</p>
           </div>
           <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-center min-w-[100px]">
             <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">Na fila</p>
-            <p className="text-3xl font-black text-slate-700">{contagemHoje.queued}</p>
+            <p className="text-3xl font-black text-slate-700">{contagem.queued}</p>
           </div>
-          {contagemHoje.missing > 0 && (
+          {contagem.late > 0 && (
+            <div className="p-4 bg-amber-50 rounded-2xl border border-amber-300 text-center min-w-[100px]">
+              <p className="text-[10px] font-black text-amber-700 uppercase tracking-widest leading-none mb-1">Atrasadas</p>
+              <p className="text-3xl font-black text-amber-600">{contagem.late}</p>
+            </div>
+          )}
+          {contagem.missing > 0 && (
             <div className="p-4 bg-red-50 rounded-2xl border-2 border-red-300 text-center min-w-[100px]">
               <p className="text-[10px] font-black text-red-700 uppercase tracking-widest leading-none mb-1">Não enviadas</p>
-              <p className="text-3xl font-black text-red-600">{contagemHoje.missing}</p>
+              <p className="text-3xl font-black text-red-600">{contagem.missing}</p>
             </div>
           )}
           <div className="p-4 bg-yellow-50 rounded-2xl border border-yellow-200 text-center min-w-[100px]">
