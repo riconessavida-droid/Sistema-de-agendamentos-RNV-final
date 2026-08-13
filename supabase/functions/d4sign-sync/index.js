@@ -49,6 +49,16 @@ const MAX_REQUESTS = 7;
 // Dias sem assinar até o Eduardo ser avisado. Combinado com ele: 2.
 const CHASE_AFTER_DAYS = 2;
 
+/**
+ * Trava de segurança: quantos clientes a função pode criar numa rodada.
+ *
+ * O cofre real tem 413 documentos — todo o histórico da consultoria. Sem
+ * esta trava, um engano de leitura vira dezenas de clientes-fantasma e
+ * dezenas de mensagens no WhatsApp do Eduardo, em produção, de uma vez.
+ * Se o teto for atingido a rodada para e reporta, em vez de continuar.
+ */
+const MAX_NEW_CLIENTS_PER_RUN = 3;
+
 const INACTIVE_STATUSES = new Set(["CLOSED_CONTRACT", "CANCELLED_EARLY"]);
 const DEFAULT_OWNER_EMAILS = ["riconessavida@gmail.com", "eduardo@riconessavida.com.br"];
 
@@ -338,6 +348,69 @@ Deno.serve(async (req) => {
       .select("doc_uuid, status, sent_at, chase_sent_at, matched_client_id");
     const known = new Map((knownRows ?? []).map((r) => [r.doc_uuid, r]));
 
+    // ------------------------------------------------- primeira rodada
+    /**
+     * O cofre carrega TODO o histórico (413 documentos). Como a nossa
+     * tabela nasce vazia, sem isto a primeira rodada leria cada contrato
+     * antigo como recém-assinado: criaria cliente, marcaria assinado e
+     * mandaria um WhatsApp para cada um — exatamente o backfill que o
+     * Eduardo descartou ("só clientes novos daqui pra frente").
+     *
+     * Então a primeira rodada é só INVENTÁRIO: registra o que existe e o
+     * estado de cada um, sem processar assinatura e sem notificar ninguém.
+     * A partir da segunda, só o que MUDAR desse retrato é tratado como
+     * novidade — que é a definição prática de "daqui pra frente".
+     */
+    const isFirstRun = !stored?.last_run_at && known.size === 0;
+
+    if (isFirstRun) {
+      if (dryRun) {
+        return json({
+          ok: true, dryRun: true, mode: "inventário (primeira rodada)",
+          safe: safeName, documents: documents.length,
+          note: "A primeira rodada real vai apenas registrar estes documentos, sem criar cliente nem notificar.",
+          sampleDocument: documents[0]?.raw ?? null,
+          requestsUsed
+        });
+      }
+
+      const inventory = documents.map((doc) => ({
+        doc_uuid: doc.uuid,
+        document_name: doc.name,
+        uuid_safe: safeUuid,
+        status_id: doc.statusId,
+        status_name: doc.statusName,
+        sent_at: (doc.sentAt ?? now).toISOString(),
+        status: doc.isFinished ? "IGNORED" : doc.isCanceled ? "CANCELED" : "AWAITING",
+        issue: doc.isFinished ? "histórico anterior à integração — não processado de propósito" : null,
+        last_seen_at: now.toISOString(),
+        raw: doc.raw
+      }));
+
+      // Em blocos, para não estourar o limite de payload do PostgREST.
+      for (let i = 0; i < inventory.length; i += 100) {
+        const { error: invErr } = await supabase
+          .from("d4sign_documents").upsert(inventory.slice(i, i + 100), { onConflict: "doc_uuid" });
+        if (invErr) throw new Error(`inventário: ${invErr.message}`);
+      }
+
+      await saveState({
+        safe_uuid: safeUuid,
+        safe_name: safeName,
+        documents_seen: documents.length,
+        sample_document: documents[0]?.raw ?? null
+      });
+
+      return json({
+        ok: true, mode: "inventário (primeira rodada)",
+        safe: safeName, documents: documents.length, inventoried: inventory.length,
+        note: "Histórico registrado sem processar. Da próxima rodada em diante, só o que mudar é tratado como novo.",
+        requestsUsed
+      });
+    }
+
+    let createdThisRun = 0;
+
     // ---------------------------------------------- clientes (1 leitura)
     const { data: allClients } = await supabase
       .from("clients").select("id, name, email, cpf, phone_digits, status_by_month");
@@ -381,6 +454,13 @@ Deno.serve(async (req) => {
       if (!doc.isFinished) continue;
       // Já demos baixa neste contrato: não gasta requisição de novo.
       if (previous && (previous.status === "OK" || previous.status === "INVALID_CPF")) continue;
+      // Histórico registrado no inventário: fica como está, de propósito.
+      if (previous && previous.status === "IGNORED") continue;
+
+      if (createdThisRun >= MAX_NEW_CLIENTS_PER_RUN) {
+        report.skipped.push({ uuid: doc.uuid, name: doc.name, reason: "teto de criação por rodada atingido" });
+        break;
+      }
 
       let signers;
       try {
@@ -413,6 +493,34 @@ Deno.serve(async (req) => {
       const signedAt = signedAtDate.toISOString();
       const cpfValid = isValidCpf(signerCpfDigits);
       const issue = cpfValid ? null : "CPF inválido (" + (formatCpf(signerCpfDigits) || "não informado") + ")";
+
+      /**
+       * Guarda de sanidade: se NADA foi lido do signatário, o problema é
+       * de leitura da API, não do contrato. Criar cliente aqui produziria
+       * uma ficha vazia e um alarme falso no WhatsApp — melhor parar e
+       * deixar o retorno cru registrado para eu corrigir o parsing.
+       */
+      if (!signerName && !signerEmail && !signerCpfDigits) {
+        report.errors.push({
+          uuid: doc.uuid,
+          error: "não consegui ler nome, e-mail nem CPF do signatário",
+          rawSigner: signer
+        });
+        if (!dryRun) {
+          await supabase.from("d4sign_documents").upsert({
+            doc_uuid: doc.uuid,
+            document_name: doc.name,
+            uuid_safe: safeUuid,
+            status_id: doc.statusId,
+            status_name: doc.statusName,
+            status: "UNMATCHED",
+            issue: "signatário ilegível no retorno da API",
+            last_seen_at: now.toISOString(),
+            raw: { document: doc.raw, signer }
+          }, { onConflict: "doc_uuid" });
+        }
+        continue;
+      }
 
       // ---------------------------------------- de quem é este contrato?
       let clientId = null;
@@ -461,6 +569,8 @@ Deno.serve(async (req) => {
         });
         continue;
       }
+
+      if (!clientId) createdThisRun++;
 
       // --------------------------------------- grava cliente (acha ou cria)
       let created = false;
@@ -658,7 +768,13 @@ Deno.serve(async (req) => {
       sample_signer: sampleSigner
     });
 
-    return json({ ok: true, ...report, safe: safeName, documents: documents.length, requestsUsed });
+    return json({
+      ok: true, ...report,
+      safe: safeName, documents: documents.length, requestsUsed,
+      // Em modo seco vai junto o retorno cru do signatário: é com ele que
+      // se conferem os nomes reais dos campos sem gastar outra rodada.
+      ...(dryRun ? { sampleSigner } : {})
+    });
 
   } catch (e) {
     const message = String(e?.message ?? e);
