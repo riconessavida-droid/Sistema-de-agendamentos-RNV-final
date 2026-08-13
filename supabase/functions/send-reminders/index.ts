@@ -129,8 +129,16 @@ Deno.serve(async (req: Request) => {
   if (error) return json({ error: error.message }, 500);
   const clients = clientsRaw ?? [];
 
-  const { data: logRaw } = await supabase.from("reminder_log").select("client_id, month_key, reminder_type");
-  const alreadySent = new Set((logRaw ?? []).map((r: any) => `${r.client_id}|${r.month_key}|${r.reminder_type}`));
+  // Só lembrete que REALMENTE saiu bloqueia um novo envio. Antes o dedupe
+  // olhava qualquer linha do log, então uma falha silenciava o cliente até
+  // o fim do ciclo — o oposto do que se quer de um registro de falha.
+  const { data: logRaw } = await supabase
+    .from("reminder_log").select("client_id, month_key, reminder_type, status");
+  const alreadySent = new Set(
+    (logRaw ?? [])
+      .filter((r: any) => r.status === "sent" || r.status === "skipped")
+      .map((r: any) => `${r.client_id}|${r.month_key}|${r.reminder_type}`),
+  );
 
   // Quem JÁ TEM reunião marcada para frente não recebe cobrança para marcar.
   //
@@ -243,7 +251,30 @@ Deno.serve(async (req: Request) => {
       if (authHeader) headers["Authorization"] = authHeader;
       const resp = await fetch(targetUrl, { method: "POST", headers, body: JSON.stringify(payload) });
       const text = await resp.text();
-      if (resp.ok) {
+
+      // HTTP 200 do papo.ai NÃO significa mensagem entregue — ele responde
+      // "success" só por ter aceitado o POST. Em 08–13/ago/2026 o canal do
+      // WhatsApp ficou desconectado, o webhook seguiu respondendo 200, e
+      // 19 lembretes foram gravados como enviados sem nunca sair. Como o
+      // dedupe olha o log, esses clientes ficaram silenciados de vez.
+      //
+      // Agora o corpo da resposta é lido: só conta como enviado o que veio
+      // com success != false E mode "active". Rascunho (mode "test") ou
+      // recusa viram "failed" — e failed é retentado no dia seguinte.
+      const accepted = (() => {
+        if (!resp.ok) return { ok: false, why: `HTTP ${resp.status}` };
+        try {
+          const body = JSON.parse(text);
+          if (body?.success === false) return { ok: false, why: "papo.ai recusou (success=false)" };
+          const mode = body?.data?.mode ?? body?.mode;
+          if (mode && mode !== "active") return { ok: false, why: `webhook em modo "${mode}", não dispara` };
+          return { ok: true, why: "" };
+        } catch {
+          return { ok: true, why: "" };   // resposta não-JSON: confia no 200
+        }
+      })();
+
+      if (accepted.ok) {
         summary.sent++;
         await supabase.from("reminder_log").upsert(
           { client_id: d.client.id, month_key: d.monthKey, reminder_type: d.type, status: "sent", detail: text.slice(0, 200) },
@@ -257,6 +288,15 @@ Deno.serve(async (req: Request) => {
         await supabase.from("clients").update({ status_by_month: sbm }).eq("id", d.client.id);
 
         details.push({ client: d.client.name, type: d.type, status: "sent" });
+      } else if (resp.ok) {
+        // Aceito pelo papo.ai mas não vai sair: registra como falha para
+        // aparecer em vermelho na aba Tarefas do Dia e ser tentado de novo.
+        summary.failed++;
+        await supabase.from("reminder_log").upsert(
+          { client_id: d.client.id, month_key: d.monthKey, reminder_type: d.type, status: "failed", detail: `${accepted.why}: ${text.slice(0, 160)}` },
+          { onConflict: "client_id,month_key,reminder_type" },
+        );
+        details.push({ client: d.client.name, type: d.type, status: "failed", why: accepted.why });
       } else {
         summary.failed++;
         await supabase.from("reminder_log").upsert(
