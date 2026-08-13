@@ -7,7 +7,7 @@ import {
   CheckSquare, Download, UserCog, Bell, FileSignature,
   CalendarClock, Link2, RefreshCw, DownloadCloud
 } from 'lucide-react';
-import { Client, MeetingStatus, User, UserRole, BillingConfig, ClientBilling, BillingPeriod, EagendaBooking } from './types';
+import { Client, MeetingStatus, User, UserRole, BillingConfig, ClientBilling, BillingPeriod, EagendaBooking, ReminderLogEntry, ReminderCheck, ReminderType } from './types';
 import {
   STATUS_OPTIONS, GROUP_COLORS, getNextMonths, getMonthLabel, MEETING_LABEL_TEXTS
 } from './constants';
@@ -161,6 +161,15 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
   const [conciliationFilter, setConciliationFilter] = useState<'all' | 'pending' | 'done'>('all');
   const [conciliationSearch, setConciliationSearch] = useState('');
 
+  // Tarefas do Dia: o que o sistema REALMENTE disparou (reminder_log) e o
+  // que a assistente já conferiu contra o papo.ai (reminder_checks).
+  // A tela até então mostrava só quem DEVERIA receber; durante a migração
+  // é preciso ver também o que aconteceu de fato.
+  const [reminderLog, setReminderLog] = useState<ReminderLogEntry[]>([]);
+  const [reminderChecks, setReminderChecks] = useState<Record<string, ReminderCheck>>({});
+  const [savingCheck, setSavingCheck] = useState<string | null>(null);
+  const [copiedPhone, setCopiedPhone] = useState<string | null>(null);
+
   const [visibleMonths, setVisibleMonths] = useState<string[]>(() => {
     const months: string[] = [];
     let current = new Date(2025, 5, 1); // Junho 2025
@@ -225,6 +234,100 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
   };
 
   useEffect(() => { loadBoard(); }, [currentUser]);
+
+  /**
+   * Tarefas do Dia: o disparo real e a conferência.
+   *
+   * Sem isto a tela mostra apenas a intenção ("este cliente deveria ser
+   * avisado"). A assistente precisa do fato ("o sistema avisou às 10:00"),
+   * porque é esse fato que ela vai procurar no papo.ai.
+   */
+  const loadReminderState = async () => {
+    if (!currentUser) return;
+
+    const [logRes, checkRes] = await Promise.all([
+      supabase.from('reminder_log').select('client_id, month_key, reminder_type, status, created_at'),
+      supabase.from('reminder_checks').select('client_id, month_key, reminder_type, checked_at, note')
+    ]);
+
+    if (!logRes.error && logRes.data) {
+      setReminderLog(logRes.data.map((r: any) => ({
+        clientId: r.client_id,
+        monthKey: r.month_key,
+        reminderType: r.reminder_type as ReminderType,
+        status: r.status,
+        createdAt: r.created_at
+      })));
+    }
+
+    if (!checkRes.error && checkRes.data) {
+      const map: Record<string, ReminderCheck> = {};
+      checkRes.data.forEach((r: any) => {
+        map[`${r.client_id}|${r.month_key}|${r.reminder_type}`] = {
+          clientId: r.client_id,
+          monthKey: r.month_key,
+          reminderType: r.reminder_type as ReminderType,
+          checkedAt: r.checked_at,
+          note: r.note ?? null
+        };
+      });
+      setReminderChecks(map);
+    }
+  };
+
+  useEffect(() => { loadReminderState(); }, [currentUser]);
+
+  // Enquanto a assistente está conferindo, a tela se atualiza sozinha —
+  // o disparo das 10h aparece sem ela precisar recarregar a página.
+  useEffect(() => {
+    if (activeTab !== 'tasks' || !currentUser) return;
+    const id = setInterval(loadReminderState, 60000);
+    return () => clearInterval(id);
+  }, [activeTab, currentUser]);
+
+  /** Liga/desliga o "conferi este no papo.ai". */
+  const toggleReminderCheck = async (
+    clientId: string,
+    monthKey: string,
+    reminderType: ReminderType
+  ) => {
+    const key = `${clientId}|${monthKey}|${reminderType}`;
+    const existing = reminderChecks[key];
+    setSavingCheck(key);
+
+    if (existing) {
+      const { error } = await supabase.from('reminder_checks').delete()
+        .eq('client_id', clientId).eq('month_key', monthKey).eq('reminder_type', reminderType);
+      if (!error) {
+        setReminderChecks(prev => {
+          const { [key]: _removed, ...rest } = prev;
+          return rest;
+        });
+      }
+    } else {
+      const checkedAt = new Date().toISOString();
+      const { error } = await supabase.from('reminder_checks').upsert(
+        { client_id: clientId, month_key: monthKey, reminder_type: reminderType, checked_at: checkedAt },
+        { onConflict: 'client_id,month_key,reminder_type' }
+      );
+      if (!error) {
+        setReminderChecks(prev => ({
+          ...prev,
+          [key]: { clientId, monthKey, reminderType, checkedAt, note: null }
+        }));
+      }
+    }
+
+    setSavingCheck(null);
+  };
+
+  const copyPhone = async (phone: string) => {
+    try {
+      await navigator.clipboard.writeText(phone);
+      setCopiedPhone(phone);
+      setTimeout(() => setCopiedPhone(current => (current === phone ? null : current)), 1500);
+    } catch { /* navegador sem permissão de área de transferência */ }
+  };
 
   useEffect(() => {
     if (activeTab !== 'conciliation' || !currentUser) return;
@@ -1621,6 +1724,63 @@ const billingData = useMemo(() => {
 
   const allReminders = getClientReminders();
 
+  type DayReminderItem = {
+    client: Client;
+    nextMeetingDate: Date;
+    monthKey: string;
+    lastMeetingDate: string;
+    nextMeetingLabel: string;
+  };
+
+  /**
+   * O que o sistema fez com este lembrete — a informação que a assistente
+   * usa para conferir contra o papo.ai.
+   *
+   * 'sent'    o disparo aconteceu; a mensagem TEM que estar no papo.ai
+   * 'queued'  ainda vai sair no cron das 10h; não é para procurar
+   * 'missing' devia ter saído e não saiu; é aqui que ela age
+   *
+   * O 'missing' só vale a partir de 13/08/2026, dia em que o canal do
+   * WhatsApp voltou e a fila foi destravada. Antes disso o silêncio era
+   * a queda do canal, não uma falha por cliente — marcar aqueles dias de
+   * vermelho seria ruído, e ruído faz a conferência perder o sentido.
+   */
+  const CHECK_ERA_START = new Date(2026, 7, 13);
+
+  const reminderStateOf = (
+    item: DayReminderItem,
+    type: ReminderType,
+    day: Date
+  ): { state: 'sent' | 'queued' | 'missing'; at: string | null } => {
+    const entry = reminderLog.find(
+      r => r.clientId === item.client.id && r.monthKey === item.monthKey && r.reminderType === type
+    );
+
+    if (entry) {
+      const at = new Date(entry.createdAt);
+      return {
+        state: 'sent',
+        at: at.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+      };
+    }
+
+    // Hoje antes das 10h, ou qualquer dia futuro: ainda vai sair.
+    const isFuture = day.getTime() > today.getTime();
+    const beforeDispatch = day.getTime() === today.getTime() && new Date().getHours() < 10;
+    if (isFuture || beforeDispatch) return { state: 'queued', at: null };
+
+    if (day.getTime() < CHECK_ERA_START.getTime()) return { state: 'queued', at: null };
+
+    return { state: 'missing', at: null };
+  };
+
+  const formatPhone = (digits: string): string => {
+    const d = (digits ?? '').replace(/\D/g, '').replace(/^55/, '');
+    if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+    if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+    return digits ?? '';
+  };
+
   // Para cada dia da janela, calcula quem aparece naquele dia
   // Um cliente aparece num dia D se:
   //   - sua reunião é em D+3 (lembrete de 3 dias)
@@ -1660,23 +1820,36 @@ const billingData = useMemo(() => {
           (nextMeeting.getTime() - day.getTime()) / (1000 * 60 * 60 * 24)
         );
 
-        // Descobre o mês da próxima reunião para checar se já foi avisado
-        // ou se já tem data agendada (nesse caso sai da lista de lembretes).
+        // Quem JÁ AGENDOU sai da lista: não há mais o que cobrar.
+        //
+        // O `notified` ficou de fora de propósito. Ele era o filtro certo
+        // no tempo do envio manual, mas hoje a própria função acende esse
+        // flag ao disparar — então continuar filtrando por ele fazia o
+        // cliente DESAPARECER da tela no instante em que era avisado, que
+        // é justamente o momento em que a assistente precisa vê-lo para
+        // conferir a entrega no papo.ai.
         const nextMeetingMonthKey = toMonthKey(nextMeeting);
-        const alreadyNotified = client.statusByMonth[nextMeetingMonthKey]?.notified === true;
         const alreadyScheduled = client.statusByMonth[nextMeetingMonthKey]?.customDate != null;
-        if (alreadyNotified || alreadyScheduled) return acc;
+        if (alreadyScheduled) return acc;
+
+        const base = {
+          client,
+          nextMeetingDate: nextMeeting,
+          monthKey: nextMeetingMonthKey,
+          lastMeetingDate: lastDoneDate.toLocaleDateString('pt-BR'),
+          nextMeetingLabel
+        };
 
         if (diffFromDay === 3) {
-          acc.tres.push({ client, nextMeetingDate: nextMeeting, lastMeetingDate: lastDoneDate.toLocaleDateString('pt-BR'), nextMeetingLabel });
+          acc.tres.push(base);
         } else if (diffFromDay === 7) {
-          acc.sete.push({ client, nextMeetingDate: nextMeeting, lastMeetingDate: lastDoneDate.toLocaleDateString('pt-BR'), nextMeetingLabel });
+          acc.sete.push(base);
         }
 
         return acc;
       }, {
-        tres: [] as Array<{ client: Client; nextMeetingDate: Date; lastMeetingDate: string; nextMeetingLabel: string }>,
-        sete: [] as Array<{ client: Client; nextMeetingDate: Date; lastMeetingDate: string; nextMeetingLabel: string }>
+        tres: [] as DayReminderItem[],
+        sete: [] as DayReminderItem[]
       });
   };
 
@@ -1686,6 +1859,110 @@ const billingData = useMemo(() => {
     const r = getDayReminders(d);
     return sum + r.tres.length + r.sete.length;
   }, 0);
+
+  // Os números que a assistente bate contra o papo.ai antes de abrir
+  // cliente por cliente: se "Enviadas hoje" fecha, a conferência acabou.
+  const contagemHoje = (['3d', '7d'] as ReminderType[]).reduce(
+    (acc, type) => {
+      const lista = type === '3d' ? totalHoje.tres : totalHoje.sete;
+      lista.forEach(item => {
+        const { state } = reminderStateOf(item, type, today);
+        acc[state] += 1;
+      });
+      return acc;
+    },
+    { sent: 0, queued: 0, missing: 0 }
+  );
+
+  /**
+   * O cartão de um cliente na conferência. Nome, telefone para achar a
+   * conversa no papo.ai, o que o sistema fez e o "já conferi".
+   */
+  const renderReminderCard = (item: DayReminderItem, type: ReminderType, day: Date) => {
+    const { state, at } = reminderStateOf(item, type, day);
+    const checkKey = `${item.client.id}|${item.monthKey}|${type}`;
+    const checked = Boolean(reminderChecks[checkKey]);
+    const phoneDigits = (item.client.phoneDigits ?? '').replace(/\D/g, '');
+    const isTres = type === '3d';
+
+    const tom = checked
+      ? 'bg-emerald-50 border-emerald-200'
+      : state === 'missing'
+      ? 'bg-red-50 border-red-300'
+      : isTres
+      ? 'bg-red-50/60 border-red-100'
+      : 'bg-yellow-50/60 border-yellow-100';
+
+    return (
+      <div key={item.client.id} className={`p-3 rounded-xl border-2 transition-all ${tom}`}>
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <p className="font-black text-slate-800 text-xs uppercase truncate">{item.client.name}</p>
+
+            {/* O telefone é como ela acha a conversa no papo.ai. */}
+            <button
+              onClick={() => copyPhone(phoneDigits)}
+              className="mt-1 flex items-center gap-1.5 text-[11px] font-bold text-slate-600 hover:text-slate-900 transition-colors"
+              title="Copiar telefone para buscar no papo.ai"
+            >
+              {formatPhone(phoneDigits)}
+              <span className="text-[9px] text-slate-400">
+                {copiedPhone === phoneDigits ? '✓ copiado' : '📋'}
+              </span>
+            </button>
+
+            <p className="text-[9px] text-slate-400 font-bold mt-1">
+              {item.nextMeetingLabel} • reunião {item.nextMeetingDate.toLocaleDateString('pt-BR')}
+            </p>
+          </div>
+
+          {/* "Já conferi este no papo.ai" */}
+          <button
+            onClick={() => toggleReminderCheck(item.client.id, item.monthKey, type)}
+            disabled={savingCheck === checkKey}
+            className={`flex-shrink-0 w-7 h-7 rounded-lg text-xs font-black transition-all disabled:opacity-40 ${
+              checked
+                ? 'bg-emerald-500 text-white'
+                : 'bg-white text-slate-300 border-2 border-slate-200 hover:border-emerald-400 hover:text-emerald-500'
+            }`}
+            title={checked ? 'Conferido ✓ (clique para desmarcar)' : 'Marcar como conferido no papo.ai'}
+          >
+            ✓
+          </button>
+        </div>
+
+        <div className="mt-2 flex items-center justify-between gap-2">
+          {state === 'sent' && (
+            <span className="text-[9px] font-black uppercase tracking-wider text-emerald-600 bg-emerald-100 px-2 py-1 rounded-md">
+              ✅ Enviado {at}
+            </span>
+          )}
+          {state === 'queued' && (
+            <span className="text-[9px] font-black uppercase tracking-wider text-slate-500 bg-slate-100 px-2 py-1 rounded-md">
+              ⏳ Sai às 10h
+            </span>
+          )}
+          {state === 'missing' && (
+            <span className="text-[9px] font-black uppercase tracking-wider text-red-600 bg-red-100 px-2 py-1 rounded-md">
+              ⚠️ Não enviado
+            </span>
+          )}
+
+          {/* O envio na mão só faz sentido quando o automático falhou. */}
+          {state === 'missing' && phoneDigits && (
+            <a
+              href={`https://wa.me/55${phoneDigits}?text=${encodeURIComponent(`Olá ${item.client.name}! Passando para lembrar que sua próxima reunião de consultoria está chegando. Vamos agendar?`)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex-shrink-0 bg-green-500 hover:bg-green-600 text-white text-[10px] font-black px-3 py-1.5 rounded-lg transition-all"
+            >
+              📱 Enviar
+            </a>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
@@ -1697,17 +1974,27 @@ const billingData = useMemo(() => {
             <CheckCircle2 className="text-yellow-500 w-7 h-7" /> Tarefas do Dia
           </h2>
           <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">
-            Lembretes de 3 e 7 dias • Janela de 7 dias
+            Conferência com o papo.ai • Janela de 7 dias
           </p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex gap-3 flex-wrap">
+          <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200 text-center min-w-[100px]">
+            <p className="text-[10px] font-black text-emerald-700 uppercase tracking-widest leading-none mb-1">Enviadas hoje</p>
+            <p className="text-3xl font-black text-emerald-600">{contagemHoje.sent}</p>
+          </div>
+          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-center min-w-[100px]">
+            <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">Na fila</p>
+            <p className="text-3xl font-black text-slate-700">{contagemHoje.queued}</p>
+          </div>
+          {contagemHoje.missing > 0 && (
+            <div className="p-4 bg-red-50 rounded-2xl border-2 border-red-300 text-center min-w-[100px]">
+              <p className="text-[10px] font-black text-red-700 uppercase tracking-widest leading-none mb-1">Não enviadas</p>
+              <p className="text-3xl font-black text-red-600">{contagemHoje.missing}</p>
+            </div>
+          )}
           <div className="p-4 bg-yellow-50 rounded-2xl border border-yellow-200 text-center min-w-[100px]">
             <p className="text-[10px] font-black text-yellow-700 uppercase tracking-widest leading-none mb-1">Hoje</p>
             <p className="text-3xl font-black text-yellow-600">{totalHojeCount}</p>
-          </div>
-          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-center min-w-[100px]">
-            <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">7 dias</p>
-            <p className="text-3xl font-black text-slate-700">{totalGeral}</p>
           </div>
         </div>
       </div>
@@ -1781,27 +2068,7 @@ const billingData = useMemo(() => {
                 {tres.length === 0 ? (
                   <p className="text-[11px] text-slate-300 font-bold text-center py-4">Nenhum cliente</p>
                 ) : (
-                  tres.map(item => (
-                    <div key={item.client.id} className="flex items-center justify-between gap-3 p-3 bg-red-50 rounded-xl border border-red-100">
-                      <div className="min-w-0">
-                        <p className="font-black text-slate-800 text-xs uppercase truncate">{item.client.name}</p>
-                        <p className="text-[9px] text-red-500 font-bold mt-0.5">
-                          {item.nextMeetingLabel} • {item.nextMeetingDate.toLocaleDateString('pt-BR')}
-                        </p>
-                        <p className="text-[9px] text-slate-400 font-bold">
-                          Última reunião: {item.lastMeetingDate}
-                        </p>
-                      </div>
-                      <a
-                        href={`https://wa.me/55${item.client.phoneDigits.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá ${item.client.name}! Passando para lembrar que sua próxima reunião de consultoria está chegando. Vamos agendar?`)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex-shrink-0 bg-green-500 hover:bg-green-600 text-white text-[10px] font-black px-3 py-2 rounded-lg transition-all"
-                      >
-                        📱 WA
-                      </a>
-                    </div>
-                  ))
+                  tres.map(item => renderReminderCard(item, '3d', day))
                 )}
               </div>
 
@@ -1819,27 +2086,7 @@ const billingData = useMemo(() => {
                 {sete.length === 0 ? (
                   <p className="text-[11px] text-slate-300 font-bold text-center py-4">Nenhum cliente</p>
                 ) : (
-                  sete.map(item => (
-                    <div key={item.client.id} className="flex items-center justify-between gap-3 p-3 bg-yellow-50 rounded-xl border border-yellow-100">
-                      <div className="min-w-0">
-                        <p className="font-black text-slate-800 text-xs uppercase truncate">{item.client.name}</p>
-                        <p className="text-[9px] text-yellow-600 font-bold mt-0.5">
-                          {item.nextMeetingLabel} • {item.nextMeetingDate.toLocaleDateString('pt-BR')}
-                        </p>
-                        <p className="text-[9px] text-slate-400 font-bold">
-                          Última reunião: {item.lastMeetingDate}
-                        </p>
-                      </div>
-                      <a
-                        href={`https://wa.me/55${item.client.phoneDigits.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá ${item.client.name}! Passando para lembrar que sua próxima reunião de consultoria está chegando. Vamos agendar?`)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex-shrink-0 bg-green-500 hover:bg-green-600 text-white text-[10px] font-black px-3 py-2 rounded-lg transition-all"
-                      >
-                        📱 WA
-                      </a>
-                    </div>
-                  ))
+                  sete.map(item => renderReminderCard(item, '7d', day))
                 )}
               </div>
 

@@ -95,3 +95,26 @@ export interface EagendaBooking {
   matchedClientId: string | null;
   createdAt: string;
 }
+
+export type ReminderType = '3d' | '7d';
+
+/**
+ * O que a função send-reminders registrou ao rodar. É a prova do que o
+ * sistema disparou — diferente do que a tela calcula que DEVERIA sair.
+ */
+export interface ReminderLogEntry {
+  clientId: string;
+  monthKey: string;
+  reminderType: ReminderType;
+  status: string;          // sent | failed | skipped
+  createdAt: string;       // ISO
+}
+
+/** Marca da assistente: "já conferi este no papo.ai". */
+export interface ReminderCheck {
+  clientId: string;
+  monthKey: string;
+  reminderType: ReminderType;
+  checkedAt: string;
+  note: string | null;
+}

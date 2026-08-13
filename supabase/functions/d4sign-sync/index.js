@@ -1,0 +1,610 @@
+// =====================================================================
+// Edge Function: d4sign-sync
+//
+// De hora em hora pergunta ao D4Sign o que mudou nos contratos e faz
+// sozinho o que a assistente fazia na mão:
+//
+//   1) contrato FINALIZADO  -> confere o CPF, descobre de quem é, marca
+//      "Contrato Assinado", guarda o PDF e avisa o Eduardo no WhatsApp
+//   2) contrato PARADO 2 dias sem assinar -> avisa o Eduardo para cobrar
+//
+// POR QUE POLLING E NÃO WEBHOOK: o webhook do D4Sign só se cadastra
+// documento a documento, por API. A assistente envia os contratos pelo
+// PAINEL, então os documentos dela nasceriam sem webhook e nada chegaria.
+// Perguntando, funciona não importa como o contrato foi enviado.
+//
+// ⚠️ A API do D4Sign permite 10 REQUISIÇÕES POR HORA no plano atual.
+// Uma rodada parada gasta 1 (a listagem). Só documento que MUDOU custa
+// mais. MAX_REQUESTS abaixo é o freio: o que não couber nesta hora fica
+// para a próxima, sem perder nada.
+//
+// ⚠️ A lógica de validar CPF e descobrir de quem é o contrato é a MESMA
+// da função d4sign-webhook — está duplicada aqui porque sem a CLI do
+// Supabase não dá para compartilhar arquivo entre funções. Mudou a regra
+// numa, mude na outra.
+//
+// Deploy:  Verify JWT DESLIGADO (quem chama é o cron do banco).
+// Segredos:
+//   D4SIGN_TOKEN_API    (obrigatório)  TokenAPI do painel do D4Sign
+//   D4SIGN_CRYPT_KEY    (obrigatório)  CryptKey do painel do D4Sign
+//   D4SIGN_SAFE_UUID    (opcional)     força um cofre; sem ele, descobre
+//   D4SIGN_NOTIFY_URL   (opcional)     webhook papo.ai "contrato assinado"
+//   D4SIGN_CHASE_URL    (opcional)     webhook papo.ai "contrato pendente"
+//   D4SIGN_NOTIFY_TOKEN (opcional)     Bearer dos webhooks acima
+//   D4SIGN_OWNER_EMAILS (opcional)     e-mails do Eduardo, separados por vírgula
+//   ADMIN_PHONE         (obrigatório para notificar) telefone com DDI
+//
+// Body {"dryRun": true} consulta o D4Sign e mostra o que faria, sem
+// gravar nem enviar. Bom para conferir antes de soltar.
+// =====================================================================
+
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const API_BASE = "https://secure.d4sign.com.br/api/v1";
+
+// Teto de requisições por rodada. O plano permite 10/hora; deixamos folga
+// porque uma retentativa do cron pode cair na mesma hora.
+const MAX_REQUESTS = 7;
+
+// Dias sem assinar até o Eduardo ser avisado. Combinado com ele: 2.
+const CHASE_AFTER_DAYS = 2;
+
+const INACTIVE_STATUSES = new Set(["CLOSED_CONTRACT", "CANCELLED_EARLY"]);
+const DEFAULT_OWNER_EMAILS = ["riconessavida@gmail.com", "eduardo@riconessavida.com.br"];
+
+const json = (body, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+// --------------------------------------------------------------- texto
+function normalizeName(s) {
+  return (s ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
+}
+function firstTwoNames(s) {
+  return normalizeName(s).split(" ").filter(Boolean).slice(0, 2).join(" ");
+}
+function onlyDigits(s) {
+  return (s ?? "").replace(/\D/g, "");
+}
+function normalizeEmail(s) {
+  return (s ?? "").trim().toLowerCase();
+}
+function formatCpf(d) {
+  return d.length === 11 ? d.slice(0, 3) + "." + d.slice(3, 6) + "." + d.slice(6, 9) + "-" + d.slice(9) : d;
+}
+const firstName = (full) => (full ?? "").trim().split(/\s+/)[0] ?? "";
+
+// A Meta REJEITA parâmetro de template com quebra de linha (erro 132018).
+// Tudo que vai para o WhatsApp passa por aqui antes.
+const cleanText = (v) => (v ?? "").replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim();
+const cleanUrl = (v) => (v ?? "").replace(/\s+/g, "").replace(/\/+$/, "");
+
+// O papo.ai exige DDI + DDD + número.
+const toWhatsApp = (digits) => {
+  const clean = (digits ?? "").replace(/\D/g, "");
+  if (clean.length < 10) return null;
+  return clean.startsWith("55") ? clean : "55" + clean;
+};
+
+// Dígito verificador do CPF. É esta função que protege a negativação.
+function isValidCpf(raw) {
+  const d = onlyDigits(raw);
+  if (d.length !== 11) return false;
+  if (/^(\d)\1{10}$/.test(d)) return false;
+  let sum = 0;
+  for (let i = 0; i < 9; i++) sum += parseInt(d[i], 10) * (10 - i);
+  let dv1 = (sum * 10) % 11;
+  if (dv1 === 10) dv1 = 0;
+  if (dv1 !== parseInt(d[9], 10)) return false;
+  sum = 0;
+  for (let i = 0; i < 10; i++) sum += parseInt(d[i], 10) * (11 - i);
+  let dv2 = (sum * 10) % 11;
+  if (dv2 === 10) dv2 = 0;
+  return dv2 === parseInt(d[10], 10);
+}
+
+// --------------------------------------------------------------- datas
+function monthKeyOf(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso ?? "");
+  const d = m ? new Date(m[1] + "-" + m[2] + "-" + m[3] + "T12:00:00") : new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+}
+function dayOf(iso) {
+  const m = /^\d{4}-\d{2}-(\d{2})/.exec(iso ?? "");
+  return m ? parseInt(m[1], 10) : new Date().getDate();
+}
+
+/**
+ * O D4Sign devolve data em formatos diferentes conforme o endpoint:
+ * "2026-08-11 14:32:09" (mais comum) ou ISO com timezone. O primeiro não
+ * tem fuso — é horário de Brasília, e interpretar como UTC jogaria a data
+ * 3h para trás, o que atrasaria a régua de cobrança.
+ */
+function parseD4SignDate(value) {
+  if (!value) return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  const plain = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(s);
+  if (plain) {
+    return new Date(
+      plain[1] + "-" + plain[2] + "-" + plain[3] + "T" +
+      plain[4] + ":" + plain[5] + ":" + (plain[6] ?? "00") + "-03:00"
+    );
+  }
+  const parsed = new Date(s);
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** Primeiro valor não vazio entre vários nomes possíveis de campo. */
+function pick(obj, names) {
+  if (!obj) return null;
+  for (const name of names) {
+    const value = obj[name];
+    if (value !== undefined && value !== null && String(value).trim() !== "") return value;
+  }
+  return null;
+}
+
+const daysBetween = (from, to) => (to.getTime() - from.getTime()) / 86400000;
+
+// =====================================================================
+Deno.serve(async (req) => {
+  let body = {};
+  try { body = await req.json(); } catch { /* o cron chama sem corpo */ }
+  const dryRun = body?.dryRun === true;
+
+  const tokenApi = cleanUrl(Deno.env.get("D4SIGN_TOKEN_API"));
+  const cryptKey = cleanUrl(Deno.env.get("D4SIGN_CRYPT_KEY"));
+  if (!tokenApi || !cryptKey) {
+    return json({ ok: false, error: "faltam os segredos D4SIGN_TOKEN_API e D4SIGN_CRYPT_KEY" }, 500);
+  }
+
+  const supabase = createClient(
+    Deno.env.get("SUPABASE_URL"),
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")
+  );
+
+  // ------------------------------------------------- chamadas à API
+  let requestsUsed = 0;
+  const auth = "tokenAPI=" + encodeURIComponent(tokenApi) + "&cryptKey=" + encodeURIComponent(cryptKey);
+
+  async function apiCall(path, method = "GET", payload = null) {
+    if (requestsUsed >= MAX_REQUESTS) {
+      const err = new Error("teto de requisições da rodada atingido");
+      err.budgetExhausted = true;
+      throw err;
+    }
+    requestsUsed++;
+    const url = API_BASE + path + (path.includes("?") ? "&" : "?") + auth;
+    const init = { method, headers: { "content-type": "application/json" } };
+    if (payload) init.body = JSON.stringify(payload);
+
+    const response = await fetch(url, init);
+    const text = await response.text();
+
+    if (response.status === 429) {
+      const err = new Error("D4Sign recusou por excesso de requisições (429)");
+      err.budgetExhausted = true;
+      throw err;
+    }
+    if (!response.ok) {
+      throw new Error("D4Sign " + method + " " + path + " respondeu HTTP " + response.status + ": " + text.slice(0, 300));
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error("D4Sign devolveu resposta que não é JSON em " + path + ": " + text.slice(0, 300));
+    }
+  }
+
+  // A API às vezes devolve [ {...} ], às vezes { data: [...] }, às vezes
+  // um objeto só. Normaliza tudo para lista.
+  function asList(payload) {
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload?.data)) return payload.data;
+    if (Array.isArray(payload?.documents)) return payload.documents;
+    if (payload && typeof payload === "object") return [payload];
+    return [];
+  }
+
+  const state = {
+    last_run_at: new Date().toISOString(),
+    last_ok: true,
+    last_error: null,
+    requests_used: 0,
+    documents_seen: 0
+  };
+  const report = { dryRun, signed: [], chased: [], skipped: [], errors: [] };
+
+  async function saveState(extra) {
+    if (dryRun) return;
+    await supabase.from("d4sign_sync_state")
+      .update({ ...state, ...extra, requests_used: requestsUsed })
+      .eq("id", 1);
+  }
+
+  try {
+    // ------------------------------------------------------- o cofre
+    const { data: stored } = await supabase
+      .from("d4sign_sync_state").select("*").eq("id", 1).maybeSingle();
+
+    let safeUuid = cleanUrl(Deno.env.get("D4SIGN_SAFE_UUID")) || stored?.safe_uuid || null;
+    let safeName = stored?.safe_name ?? null;
+
+    if (!safeUuid) {
+      // Descoberta custa 1 requisição — por isso o resultado fica guardado.
+      const safes = asList(await apiCall("/safes"));
+      if (safes.length === 0) throw new Error("a conta do D4Sign não devolveu nenhum cofre");
+
+      // Prefere um cofre com "contrato" no nome; senão, o primeiro.
+      const preferred =
+        safes.find((s) => normalizeName(String(pick(s, ["name-safe", "nameSafe", "name"]) ?? "")).includes("contrato")) ??
+        safes[0];
+
+      safeUuid = String(pick(preferred, ["uuid-safe", "uuidSafe", "uuid"]) ?? "");
+      safeName = String(pick(preferred, ["name-safe", "nameSafe", "name"]) ?? "");
+      if (!safeUuid) throw new Error("não achei o uuid do cofre no retorno do D4Sign");
+      if (!dryRun) {
+        await supabase.from("d4sign_sync_state")
+          .update({ safe_uuid: safeUuid, safe_name: safeName }).eq("id", 1);
+      }
+    }
+
+    // -------------------------------------------- os documentos do cofre
+    const rawDocuments = asList(await apiCall("/documents/" + encodeURIComponent(safeUuid) + "/safe"));
+    state.documents_seen = rawDocuments.length;
+
+    const documents = rawDocuments.map((d) => {
+      const statusName = String(pick(d, ["statusName", "status_name", "status"]) ?? "");
+      const flat = normalizeName(statusName);
+      return {
+        uuid: String(pick(d, ["uuidDoc", "uuid_doc", "uuid"]) ?? ""),
+        name: String(pick(d, ["nameDoc", "name_doc", "name"]) ?? ""),
+        statusId: String(pick(d, ["statusId", "status_id"]) ?? ""),
+        statusName,
+        // Classificar pelo NOME e não pelo número: a documentação pública
+        // não fixa os códigos, mas o texto é estável.
+        isFinished: flat.includes("finaliz"),
+        isCanceled: flat.includes("cancel"),
+        sentAt: parseD4SignDate(pick(d, ["dateCreated", "date_created", "createdAt", "created_at", "dateSend", "date_send"])),
+        raw: d
+      };
+    }).filter((d) => d.uuid);
+
+    // O que o sistema já sabe sobre esses documentos.
+    const { data: knownRows } = await supabase
+      .from("d4sign_documents")
+      .select("doc_uuid, status, sent_at, chase_sent_at, matched_client_id");
+    const known = new Map((knownRows ?? []).map((r) => [r.doc_uuid, r]));
+
+    // ---------------------------------------------- clientes (1 leitura)
+    const { data: allClients } = await supabase
+      .from("clients").select("id, name, email, cpf, phone_digits, status_by_month");
+    const clients = allClients ?? [];
+    const activeClients = clients.filter(
+      (c) => !Object.values(c.status_by_month ?? {}).some((s) => INACTIVE_STATUSES.has(s?.status))
+    );
+
+    const ownerEmails = new Set(
+      (Deno.env.get("D4SIGN_OWNER_EMAILS") ?? DEFAULT_OWNER_EMAILS.join(","))
+        .split(",").map(normalizeEmail).filter(Boolean)
+    );
+
+    const notifyUrl = cleanUrl(Deno.env.get("D4SIGN_NOTIFY_URL"));
+    const chaseUrl = cleanUrl(Deno.env.get("D4SIGN_CHASE_URL"));
+    const adminPhone = toWhatsApp(cleanText(Deno.env.get("ADMIN_PHONE")));
+    const notifyToken = cleanText(Deno.env.get("D4SIGN_NOTIFY_TOKEN"));
+
+    async function notify(url, payload) {
+      if (!url || !adminPhone) return { ok: false, detail: "sem URL ou sem ADMIN_PHONE" };
+      try {
+        const headers = { "content-type": "application/json" };
+        if (notifyToken) headers["authorization"] = "Bearer " + notifyToken;
+        const response = await fetch(url, {
+          method: "POST", headers,
+          body: JSON.stringify({ ...payload, phone: adminPhone })
+        });
+        return response.ok ? { ok: true } : { ok: false, detail: "HTTP " + response.status };
+      } catch (e) {
+        return { ok: false, detail: String(e) };
+      }
+    }
+
+    const now = new Date();
+    let sampleSigner = null;
+
+    // ============================================ 1) contratos assinados
+    for (const doc of documents) {
+      const previous = known.get(doc.uuid);
+
+      if (!doc.isFinished) continue;
+      // Já demos baixa neste contrato: não gasta requisição de novo.
+      if (previous && (previous.status === "OK" || previous.status === "INVALID_CPF")) continue;
+
+      let signers;
+      try {
+        signers = asList(await apiCall("/documents/" + encodeURIComponent(doc.uuid) + "/list"));
+      } catch (e) {
+        if (e.budgetExhausted) {
+          // Fica para a próxima hora, intacto. Nada se perde.
+          report.skipped.push({ uuid: doc.uuid, name: doc.name, reason: "sem requisição sobrando nesta hora" });
+          break;
+        }
+        report.errors.push({ uuid: doc.uuid, error: String(e.message ?? e) });
+        continue;
+      }
+
+      // O signatário que não é o Eduardo é o cliente.
+      const signer =
+        signers.find((s) => !ownerEmails.has(normalizeEmail(String(pick(s, ["email", "user_email"]) ?? "")))) ??
+        signers[0];
+
+      if (!signer) {
+        report.errors.push({ uuid: doc.uuid, error: "documento finalizado sem signatário" });
+        continue;
+      }
+      if (!sampleSigner) sampleSigner = signer;
+
+      const signerName = String(pick(signer, ["display_name", "displayName", "user_name", "name"]) ?? "");
+      const signerEmail = normalizeEmail(String(pick(signer, ["email", "user_email"]) ?? ""));
+      const signerCpfDigits = onlyDigits(String(pick(signer, ["documento", "identification_number", "cpf", "document"]) ?? ""));
+      const signedAtDate = parseD4SignDate(pick(signer, ["signed_at", "date_signed", "signedAt", "dateSigned"])) ?? doc.sentAt ?? now;
+      const signedAt = signedAtDate.toISOString();
+      const cpfValid = isValidCpf(signerCpfDigits);
+      const issue = cpfValid ? null : "CPF inválido (" + (formatCpf(signerCpfDigits) || "não informado") + ")";
+
+      // ---------------------------------------- de quem é este contrato?
+      let clientId = null;
+      let matchMethod = null;
+
+      if (signerEmail) {
+        const { data: link } = await supabase
+          .from("d4sign_client_links").select("client_id").eq("email", signerEmail).maybeSingle();
+        if (link?.client_id) { clientId = link.client_id; matchMethod = "link"; }
+      }
+      if (!clientId && signerCpfDigits) {
+        const byCpf = clients.filter((c) => onlyDigits(c.cpf ?? "") === signerCpfDigits);
+        if (byCpf.length === 1) { clientId = byCpf[0].id; matchMethod = "cpf"; }
+      }
+      if (!clientId && signerEmail) {
+        const byEmail = clients.filter((c) => normalizeEmail(c.email ?? "") === signerEmail);
+        if (byEmail.length === 1) { clientId = byEmail[0].id; matchMethod = "email"; }
+      }
+      if (!clientId && signerName) {
+        const target = firstTwoNames(signerName);
+        if (target) {
+          const byName = activeClients.filter((c) => firstTwoNames(c.name ?? "") === target);
+          if (byName.length === 1) { clientId = byName[0].id; matchMethod = "name"; }
+        }
+      }
+
+      // ------------------------------------------------------- o PDF
+      let pdfUrl = null;
+      try {
+        const download = await apiCall(
+          "/documents/" + encodeURIComponent(doc.uuid) + "/download",
+          "POST",
+          { document: "true", language: "pt" }
+        );
+        pdfUrl = pick(download, ["url", "link"]) ?? null;
+      } catch (e) {
+        // Sem PDF a baixa acontece igual — o link é conveniência, não requisito.
+        if (!e.budgetExhausted) report.errors.push({ uuid: doc.uuid, error: "download: " + String(e.message ?? e) });
+      }
+
+      if (dryRun) {
+        report.signed.push({
+          uuid: doc.uuid, name: signerName, email: signerEmail,
+          cpf: formatCpf(signerCpfDigits), cpfValid, matchMethod: matchMethod ?? "criaria cliente",
+          pdf: Boolean(pdfUrl), wouldNotify: true
+        });
+        continue;
+      }
+
+      // --------------------------------------- grava cliente (acha ou cria)
+      let created = false;
+      if (!clientId) {
+        let grossValue = 1599;
+        let machineRate = 10;
+        try {
+          const { data: cfg } = await supabase
+            .from("billing_config").select("contract_value, machine_rate").maybeSingle();
+          if (cfg) {
+            grossValue = cfg.contract_value ?? grossValue;
+            machineRate = cfg.machine_rate ?? machineRate;
+          }
+        } catch { /* mantém o padrão */ }
+        const netValue = parseFloat((grossValue - (grossValue * machineRate / 100)).toFixed(2));
+
+        const colors = [
+          "bg-yellow-100 border-yellow-200 text-yellow-800",
+          "bg-slate-200/50 border-slate-300 text-slate-700",
+          "bg-amber-100 border-amber-200 text-amber-800",
+          "bg-slate-300/40 border-slate-400 text-slate-600"
+        ];
+
+        const newId = crypto.randomUUID();
+        const { error: insErr } = await supabase.from("clients").insert({
+          id: newId,
+          name: signerName || "(sem nome)",
+          phone_digits: "",                        // chega depois, pelo eAgenda
+          start_month_year: monthKeyOf(signedAt),  // provisório: mês da assinatura
+          start_date: dayOf(signedAt),
+          sequence_in_month: 0,
+          group_color: colors[clients.length % colors.length],
+          status_by_month: {},
+          extra_meetings: 0,
+          contract_signed: cpfValid,
+          contract_gross_value: grossValue,
+          contract_machine_rate: machineRate,
+          contract_value: netValue,
+          email: signerEmail || null,
+          cpf: signerCpfDigits || null,
+          contract_signed_at: signedAt,
+          contract_doc_uuid: doc.uuid,
+          contract_issue: issue,
+          contract_pdf_url: pdfUrl,
+          contract_pdf_url_at: pdfUrl ? now.toISOString() : null
+        });
+        if (insErr) {
+          report.errors.push({ uuid: doc.uuid, error: "insert client: " + insErr.message });
+          continue;
+        }
+        clientId = newId;
+        matchMethod = "created";
+        created = true;
+      } else {
+        const current = clients.find((c) => c.id === clientId) ?? {};
+        const patch = {
+          contract_signed: cpfValid,
+          contract_signed_at: signedAt,
+          contract_doc_uuid: doc.uuid,
+          contract_issue: issue,
+          contract_pdf_url: pdfUrl,
+          contract_pdf_url_at: pdfUrl ? now.toISOString() : null
+        };
+        if (!current.email && signerEmail) patch.email = signerEmail;
+        if (!current.cpf && signerCpfDigits) patch.cpf = signerCpfDigits;
+
+        const { error: upErr } = await supabase.from("clients").update(patch).eq("id", clientId);
+        if (upErr) {
+          report.errors.push({ uuid: doc.uuid, error: "update client: " + upErr.message });
+          continue;
+        }
+      }
+
+      if (signerEmail && clientId) {
+        await supabase.from("d4sign_client_links").upsert(
+          { email: signerEmail, client_id: clientId, linked_name: signerName },
+          { onConflict: "email" }
+        );
+      }
+
+      await supabase.from("d4sign_documents").upsert({
+        doc_uuid: doc.uuid,
+        document_name: doc.name,
+        uuid_safe: safeUuid,
+        status_id: doc.statusId,
+        status_name: doc.statusName,
+        sent_at: (doc.sentAt ?? previous?.sent_at ?? signedAtDate) instanceof Date
+          ? (doc.sentAt ?? signedAtDate).toISOString()
+          : (previous?.sent_at ?? signedAt),
+        event_datetime: signedAt,
+        signer_name: signerName || null,
+        signer_email: signerEmail || null,
+        signer_cpf: signerCpfDigits || null,
+        signed_at: signedAt,
+        cpf_valid: cpfValid,
+        status: cpfValid ? "OK" : "INVALID_CPF",
+        issue,
+        matched_client_id: clientId,
+        match_method: matchMethod,
+        pdf_url: pdfUrl,
+        last_seen_at: now.toISOString(),
+        raw: doc.raw
+      }, { onConflict: "doc_uuid" });
+
+      // ------------------------------------------------- avisa o Eduardo
+      const statusLine = cpfValid
+        ? "Pode iniciar a consultoria."
+        : "Atenção: o CPF informado é inválido (" + formatCpf(signerCpfDigits) + "). Peça para ele refazer.";
+
+      const sent = await notify(notifyUrl, {
+        event: cpfValid ? "contract_signed_ok" : "contract_signed_invalid",
+        client_id: clientId,
+        first_name: cleanText(firstName(signerName)),
+        full_name: cleanText(signerName),
+        status_line: cleanText(statusLine),
+        email: cleanText(signerEmail),
+        cpf: formatCpf(signerCpfDigits),
+        cpf_valid: cpfValid,
+        created
+      });
+
+      report.signed.push({
+        uuid: doc.uuid, name: signerName, cpfValid,
+        matchMethod, created, pdf: Boolean(pdfUrl), notified: sent.ok, detail: sent.detail
+      });
+    }
+
+    // ================================== 2) parados sem assinar (cobrança)
+    for (const doc of documents) {
+      if (doc.isFinished || doc.isCanceled) continue;
+
+      const previous = known.get(doc.uuid);
+      // Sem data da API, vale a primeira vez que vimos o documento. A
+      // precisão é de uma hora — de sobra para uma régua de 2 dias.
+      const sentAt = doc.sentAt ?? (previous?.sent_at ? new Date(previous.sent_at) : now);
+
+      if (!dryRun) {
+        await supabase.from("d4sign_documents").upsert({
+          doc_uuid: doc.uuid,
+          document_name: doc.name,
+          uuid_safe: safeUuid,
+          status_id: doc.statusId,
+          status_name: doc.statusName,
+          sent_at: sentAt.toISOString(),
+          status: doc.isCanceled ? "CANCELED" : "AWAITING",
+          last_seen_at: now.toISOString(),
+          raw: doc.raw
+        }, { onConflict: "doc_uuid" });
+      }
+
+      const waitingDays = daysBetween(sentAt, now);
+      if (waitingDays < CHASE_AFTER_DAYS) continue;
+      if (previous?.chase_sent_at) continue;   // já cobrou uma vez
+
+      // O nome do documento no D4Sign carrega o e-mail do cliente
+      // ("Contrato 26 atualizado whatsapp - fulano@gmail com"), então dá
+      // para dizer de quem é sem gastar requisição buscando signatário.
+      const emailFromName = /([\w.+-]+)@([\w-]+)[ .]([\w.]+)/.exec(doc.name ?? "");
+      const guessedEmail = emailFromName
+        ? normalizeEmail(emailFromName[1] + "@" + emailFromName[2] + "." + emailFromName[3])
+        : null;
+      const guessedClient = guessedEmail
+        ? clients.find((c) => normalizeEmail(c.email ?? "") === guessedEmail)
+        : null;
+
+      const who = guessedClient?.name ?? doc.name ?? "um cliente";
+      const waited = Math.floor(waitingDays);
+
+      if (dryRun) {
+        report.chased.push({ uuid: doc.uuid, who, waitedDays: waited, wouldNotify: true });
+        continue;
+      }
+
+      const sent = await notify(chaseUrl, {
+        event: "contract_pending",
+        client_id: guessedClient?.id ?? null,
+        first_name: cleanText(firstName(who)),
+        full_name: cleanText(who),
+        status_line: cleanText("Enviado há " + waited + (waited === 1 ? " dia" : " dias") + " e ainda não assinou."),
+        waited_days: String(waited)
+      });
+
+      if (sent.ok) {
+        await supabase.from("d4sign_documents")
+          .update({ chase_sent_at: now.toISOString() }).eq("doc_uuid", doc.uuid);
+      }
+      report.chased.push({ uuid: doc.uuid, who, waitedDays: waited, notified: sent.ok, detail: sent.detail });
+    }
+
+    await saveState({
+      safe_uuid: safeUuid,
+      safe_name: safeName,
+      documents_seen: state.documents_seen,
+      sample_document: documents[0]?.raw ?? null,
+      sample_signer: sampleSigner
+    });
+
+    return json({ ok: true, ...report, safe: safeName, documents: documents.length, requestsUsed });
+
+  } catch (e) {
+    const message = String(e?.message ?? e);
+    state.last_ok = false;
+    state.last_error = message;
+    await saveState({});
+    // Erro de teto não é falha: é a rodada dizendo "continuo na próxima".
+    const exhausted = e?.budgetExhausted === true;
+    return json({ ok: exhausted, error: message, ...report, requestsUsed }, exhausted ? 200 : 500);
+  }
+});
