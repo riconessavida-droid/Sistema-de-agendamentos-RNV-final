@@ -365,7 +365,16 @@ Deno.serve(async (req) => {
      * A partir da segunda, só o que MUDAR desse retrato é tratado como
      * novidade — que é a definição prática de "daqui pra frente".
      */
-    const isFirstRun = !stored?.last_run_at && known.size === 0;
+    /**
+     * O critério é a tabela estar vazia — e SÓ isso.
+     *
+     * Antes eu também exigia `last_run_at` em branco, mas uma rodada que
+     * falha grava esse campo ao registrar o erro. Bastou um erro de
+     * programação meu para o modo inventário se desligar sozinho e a
+     * rodada seguinte tratar o histórico como novidade. O estado do banco
+     * é a fonte confiável; o carimbo da última execução não é.
+     */
+    const isFirstRun = known.size === 0;
 
     if (isFirstRun) {
       if (dryRun) {
@@ -482,7 +491,28 @@ Deno.serve(async (req) => {
 
       let signers;
       try {
-        signers = asList(await apiCall("/documents/" + encodeURIComponent(doc.uuid) + "/list"));
+        const rawSigners = await apiCall("/documents/" + encodeURIComponent(doc.uuid) + "/list");
+
+        /**
+         * O endpoint devolve o DOCUMENTO, com os signatários aninhados
+         * num campo `list`. Como o objeto de fora também tem "uuidDoc", o
+         * achatamento genérico parava nele e devolvia o documento como se
+         * fosse o signatário — daí nome, e-mail e CPF virem vazios.
+         *
+         * Formato real de cada signatário:
+         *   { key_signer, user_name, user_document, email, signed, ... }
+         */
+        const nested = [];
+        const collect = (node, depth) => {
+          if (!node || depth > 3) return;
+          if (Array.isArray(node)) { node.forEach((n) => collect(n, depth + 1)); return; }
+          if (typeof node !== "object") return;
+          if (Array.isArray(node.list)) { nested.push(...node.list); return; }
+          Object.values(node).forEach((n) => collect(n, depth + 1));
+        };
+        collect(rawSigners, 0);
+
+        signers = nested.length > 0 ? nested : asList(rawSigners);
       } catch (e) {
         if (e.budgetExhausted) {
           // Fica para a próxima hora, intacto. Nada se perde.
@@ -504,10 +534,15 @@ Deno.serve(async (req) => {
       }
       if (!sampleSigner) sampleSigner = signer;
 
-      const signerName = String(pickLoose(signer, ["displayName", "userName", "name"]) ?? "");
+      // Nomes confirmados no retorno real: user_name, user_document, email.
+      const signerName = String(pickLoose(signer, ["userName", "displayName", "name"]) ?? "");
       const signerEmail = normalizeEmail(String(pickLoose(signer, ["email", "userEmail"]) ?? ""));
-      const signerCpfDigits = onlyDigits(String(pickLoose(signer, ["documento", "identificationNumber", "cpf", "document"]) ?? ""));
-      const signedAtDate = parseD4SignDate(pickLoose(signer, ["signedAt", "dateSigned", "signed"])) ?? doc.sentAt ?? now;
+      const signerCpfDigits = onlyDigits(String(pickLoose(signer, ["userDocument", "documento", "identificationNumber", "cpf"]) ?? ""));
+      // `signed` é "1"/"0", não uma data — não serve como carimbo.
+      const signedAtDate =
+        parseD4SignDate(pickLoose(signer, ["signedAt", "dateSigned", "signDate"])) ??
+        parseD4SignDate(pickLoose(signer?.sign_info ?? {}, ["date", "signedAt"])) ??
+        doc.sentAt ?? now;
       const signedAt = signedAtDate.toISOString();
       const cpfValid = isValidCpf(signerCpfDigits);
       const issue = cpfValid ? null : "CPF inválido (" + (formatCpf(signerCpfDigits) || "não informado") + ")";
