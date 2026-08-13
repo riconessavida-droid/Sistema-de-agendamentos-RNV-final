@@ -144,6 +144,41 @@ function pick(obj, names) {
   return null;
 }
 
+/**
+ * A documentação pública do D4Sign não fixa os nomes dos campos, e eles
+ * variam de endpoint para endpoint ("uuid-safe", "uuidSafe", "uuid_safe").
+ * Em vez de adivinhar de novo a cada erro, aqui a chave é comparada sem
+ * hífen, underscore nem maiúscula — então qualquer uma dessas grafias cai
+ * no mesmo lugar.
+ */
+const flatKey = (k) => String(k).toLowerCase().replace(/[-_\s]/g, "");
+
+function pickLoose(obj, names) {
+  if (!obj || typeof obj !== "object") return null;
+  const wanted = names.map(flatKey);
+  for (const [key, value] of Object.entries(obj)) {
+    if (!wanted.includes(flatKey(key))) continue;
+    if (value !== undefined && value !== null && String(value).trim() !== "") return value;
+  }
+  return null;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Último recurso: qualquer campo cujo valor tenha cara de UUID. */
+function anyUuid(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  for (const [key, value] of Object.entries(obj)) {
+    if (typeof value === "string" && UUID_RE.test(value.trim()) && flatKey(key).includes("uuid")) {
+      return value.trim();
+    }
+  }
+  for (const value of Object.values(obj)) {
+    if (typeof value === "string" && UUID_RE.test(value.trim())) return value.trim();
+  }
+  return null;
+}
+
 const daysBetween = (from, to) => (to.getTime() - from.getTime()) / 86400000;
 
 // =====================================================================
@@ -197,13 +232,27 @@ Deno.serve(async (req) => {
   }
 
   // A API às vezes devolve [ {...} ], às vezes { data: [...] }, às vezes
-  // um objeto só. Normaliza tudo para lista.
+  // um objeto indexado por número, às vezes lista dentro de lista.
+  // Normaliza tudo para uma lista rasa de objetos.
   function asList(payload) {
-    if (Array.isArray(payload)) return payload;
-    if (Array.isArray(payload?.data)) return payload.data;
-    if (Array.isArray(payload?.documents)) return payload.documents;
-    if (payload && typeof payload === "object") return [payload];
-    return [];
+    const out = [];
+    const walk = (node, depth) => {
+      if (node === null || node === undefined || depth > 3) return;
+      if (Array.isArray(node)) {
+        node.forEach((item) => walk(item, depth + 1));
+        return;
+      }
+      if (typeof node !== "object") return;
+
+      // Objeto que já parece um registro: tem alguma chave com "uuid".
+      const hasUuid = Object.keys(node).some((k) => flatKey(k).includes("uuid"));
+      if (hasUuid) { out.push(node); return; }
+
+      // Senão é envelope ({data: ...}, {"0": {...}}): desce mais um nível.
+      Object.values(node).forEach((item) => walk(item, depth + 1));
+    };
+    walk(payload, 0);
+    return out;
   }
 
   const state = {
@@ -232,17 +281,30 @@ Deno.serve(async (req) => {
 
     if (!safeUuid) {
       // Descoberta custa 1 requisição — por isso o resultado fica guardado.
-      const safes = asList(await apiCall("/safes"));
-      if (safes.length === 0) throw new Error("a conta do D4Sign não devolveu nenhum cofre");
+      const rawSafes = await apiCall("/safes");
+      const safes = asList(rawSafes);
+      if (safes.length === 0) {
+        // Mostra o retorno cru: é mais barato conferir o formato uma vez
+        // do que adivinhar nome de campo a cada deploy.
+        throw new Error(
+          "a conta do D4Sign não devolveu nenhum cofre reconhecível. Retorno: " +
+          JSON.stringify(rawSafes).slice(0, 500)
+        );
+      }
+
+      const safeNameOf = (s) => String(pickLoose(s, ["name-safe", "name", "nameSafe", "safeName"]) ?? "");
 
       // Prefere um cofre com "contrato" no nome; senão, o primeiro.
       const preferred =
-        safes.find((s) => normalizeName(String(pick(s, ["name-safe", "nameSafe", "name"]) ?? "")).includes("contrato")) ??
-        safes[0];
+        safes.find((s) => normalizeName(safeNameOf(s)).includes("contrato")) ?? safes[0];
 
-      safeUuid = String(pick(preferred, ["uuid-safe", "uuidSafe", "uuid"]) ?? "");
-      safeName = String(pick(preferred, ["name-safe", "nameSafe", "name"]) ?? "");
-      if (!safeUuid) throw new Error("não achei o uuid do cofre no retorno do D4Sign");
+      safeUuid = String(pickLoose(preferred, ["uuid-safe", "uuid", "uuidSafe", "safeUuid"]) ?? anyUuid(preferred) ?? "");
+      safeName = safeNameOf(preferred);
+      if (!safeUuid) {
+        throw new Error(
+          "não achei o uuid do cofre. Cofre recebido: " + JSON.stringify(preferred).slice(0, 500)
+        );
+      }
       if (!dryRun) {
         await supabase.from("d4sign_sync_state")
           .update({ safe_uuid: safeUuid, safe_name: safeName }).eq("id", 1);
@@ -254,18 +316,18 @@ Deno.serve(async (req) => {
     state.documents_seen = rawDocuments.length;
 
     const documents = rawDocuments.map((d) => {
-      const statusName = String(pick(d, ["statusName", "status_name", "status"]) ?? "");
+      const statusName = String(pickLoose(d, ["statusName", "status"]) ?? "");
       const flat = normalizeName(statusName);
       return {
-        uuid: String(pick(d, ["uuidDoc", "uuid_doc", "uuid"]) ?? ""),
-        name: String(pick(d, ["nameDoc", "name_doc", "name"]) ?? ""),
-        statusId: String(pick(d, ["statusId", "status_id"]) ?? ""),
+        uuid: String(pickLoose(d, ["uuidDoc", "uuid"]) ?? anyUuid(d) ?? ""),
+        name: String(pickLoose(d, ["nameDoc", "name"]) ?? ""),
+        statusId: String(pickLoose(d, ["statusId"]) ?? ""),
         statusName,
         // Classificar pelo NOME e não pelo número: a documentação pública
         // não fixa os códigos, mas o texto é estável.
         isFinished: flat.includes("finaliz"),
         isCanceled: flat.includes("cancel"),
-        sentAt: parseD4SignDate(pick(d, ["dateCreated", "date_created", "createdAt", "created_at", "dateSend", "date_send"])),
+        sentAt: parseD4SignDate(pickLoose(d, ["dateCreated", "createdAt", "dateSend", "dateUpload", "date"])),
         raw: d
       };
     }).filter((d) => d.uuid);
@@ -335,7 +397,7 @@ Deno.serve(async (req) => {
 
       // O signatário que não é o Eduardo é o cliente.
       const signer =
-        signers.find((s) => !ownerEmails.has(normalizeEmail(String(pick(s, ["email", "user_email"]) ?? "")))) ??
+        signers.find((s) => !ownerEmails.has(normalizeEmail(String(pickLoose(s, ["email", "userEmail"]) ?? "")))) ??
         signers[0];
 
       if (!signer) {
@@ -344,10 +406,10 @@ Deno.serve(async (req) => {
       }
       if (!sampleSigner) sampleSigner = signer;
 
-      const signerName = String(pick(signer, ["display_name", "displayName", "user_name", "name"]) ?? "");
-      const signerEmail = normalizeEmail(String(pick(signer, ["email", "user_email"]) ?? ""));
-      const signerCpfDigits = onlyDigits(String(pick(signer, ["documento", "identification_number", "cpf", "document"]) ?? ""));
-      const signedAtDate = parseD4SignDate(pick(signer, ["signed_at", "date_signed", "signedAt", "dateSigned"])) ?? doc.sentAt ?? now;
+      const signerName = String(pickLoose(signer, ["displayName", "userName", "name"]) ?? "");
+      const signerEmail = normalizeEmail(String(pickLoose(signer, ["email", "userEmail"]) ?? ""));
+      const signerCpfDigits = onlyDigits(String(pickLoose(signer, ["documento", "identificationNumber", "cpf", "document"]) ?? ""));
+      const signedAtDate = parseD4SignDate(pickLoose(signer, ["signedAt", "dateSigned", "signed"])) ?? doc.sentAt ?? now;
       const signedAt = signedAtDate.toISOString();
       const cpfValid = isValidCpf(signerCpfDigits);
       const issue = cpfValid ? null : "CPF inválido (" + (formatCpf(signerCpfDigits) || "não informado") + ")";
