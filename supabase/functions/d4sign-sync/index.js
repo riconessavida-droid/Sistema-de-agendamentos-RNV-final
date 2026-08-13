@@ -366,15 +366,20 @@ Deno.serve(async (req) => {
      * novidade — que é a definição prática de "daqui pra frente".
      */
     /**
-     * O critério é a tabela estar vazia — e SÓ isso.
+     * Uma marca explícita, e nada mais.
      *
-     * Antes eu também exigia `last_run_at` em branco, mas uma rodada que
-     * falha grava esse campo ao registrar o erro. Bastou um erro de
-     * programação meu para o modo inventário se desligar sozinho e a
-     * rodada seguinte tratar o histórico como novidade. O estado do banco
-     * é a fonte confiável; o carimbo da última execução não é.
+     * Já tentei duas heurísticas aqui e as duas falharam em produção:
+     *   1. "last_run_at em branco" — uma rodada que FALHA grava esse
+     *      campo ao registrar o erro, e o inventário se desligava sozinho.
+     *   2. "tabela vazia" — uma rodada anterior com código velho
+     *      repovoava a tabela, e o inventário se desligava de novo. Essa
+     *      criou 3 clientes do histórico na base real.
+     *
+     * A diferença agora: `inventory_done` só vira true no fim de um
+     * inventário bem-sucedido. Nenhum caminho de erro liga essa flag, e
+     * enquanto ela estiver falsa a função se recusa a criar cliente.
      */
-    const isFirstRun = known.size === 0;
+    const isFirstRun = stored?.inventory_done !== true;
 
     if (isFirstRun) {
       if (dryRun) {
@@ -422,11 +427,16 @@ Deno.serve(async (req) => {
         if (invErr) throw new Error(`inventário: ${invErr.message}`);
       }
 
+      // A flag só é ligada AQUI, depois de o inventário inteiro ter sido
+      // gravado sem erro. É o que separa "já conheço o histórico" de
+      // "ainda não sei o que é antigo" — e nenhum caminho de erro passa
+      // por esta linha.
       await saveState({
         safe_uuid: safeUuid,
         safe_name: safeName,
         documents_seen: documents.length,
-        sample_document: documents[0]?.raw ?? null
+        sample_document: documents[0]?.raw ?? null,
+        inventory_done: true
       });
 
       return json({
