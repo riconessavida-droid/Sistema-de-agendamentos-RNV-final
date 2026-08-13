@@ -374,6 +374,18 @@ Deno.serve(async (req) => {
         });
       }
 
+      /**
+       * A listagem do D4Sign não traz NENHUMA data (os campos são
+       * uuidDoc, nameDoc, type, size, pages, uuidSafe, safeName,
+       * statusId, statusName). Sem data, todo documento antigo pareceria
+       * ter sido enviado "agora" — e em dois dias o Eduardo receberia uma
+       * cobrança para cada contrato do histórico que nunca foi assinado.
+       *
+       * Por isso o inventário já nasce com `chase_sent_at` preenchido nos
+       * que estão aguardando: marca o histórico como "já tratado" e tira
+       * todos eles da régua de cobrança. Contrato que aparecer DEPOIS
+       * desta rodada entra sem essa marca e é cobrado normalmente.
+       */
       const inventory = documents.map((doc) => ({
         doc_uuid: doc.uuid,
         document_name: doc.name,
@@ -382,7 +394,10 @@ Deno.serve(async (req) => {
         status_name: doc.statusName,
         sent_at: (doc.sentAt ?? now).toISOString(),
         status: doc.isFinished ? "IGNORED" : doc.isCanceled ? "CANCELED" : "AWAITING",
-        issue: doc.isFinished ? "histórico anterior à integração — não processado de propósito" : null,
+        issue: doc.isFinished
+          ? "histórico anterior à integração — não processado de propósito"
+          : doc.isCanceled ? null : "histórico anterior à integração — fora da régua de cobrança",
+        chase_sent_at: doc.isFinished || doc.isCanceled ? null : now.toISOString(),
         last_seen_at: now.toISOString(),
         raw: doc.raw
       }));
