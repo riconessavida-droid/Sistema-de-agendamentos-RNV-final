@@ -342,6 +342,10 @@ Deno.serve(async (req) => {
       };
     }).filter((d) => d.uuid);
 
+    // Um único "agora" para a rodada inteira: o inventário e a régua de
+    // cobrança precisam concordar sobre o instante de referência.
+    const now = new Date();
+
     // O que o sistema já sabe sobre esses documentos.
     const { data: knownRows } = await supabase
       .from("d4sign_documents")
@@ -459,7 +463,6 @@ Deno.serve(async (req) => {
       }
     }
 
-    const now = new Date();
     let sampleSigner = null;
 
     // ============================================ 1) contratos assinados
