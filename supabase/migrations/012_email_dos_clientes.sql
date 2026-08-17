@@ -30,10 +30,14 @@ with ultimo_email as (
      and position('@' in b.attendee_email) > 1
    order by b.matched_client_id, b.start_datetime desc
 )
+-- O cast é necessário: `clients.id` é uuid e `matched_client_id` é text.
+-- Comparar como texto (em vez de converter o texto para uuid) evita que a
+-- consulta quebre inteira se alguma linha antiga tiver um valor fora do
+-- formato — ela simplesmente não casa, em vez de derrubar o update.
 update public.clients c
    set email = u.email
   from ultimo_email u
- where c.id = u.client_id
+ where c.id::text = u.client_id
    and (c.email is null or trim(c.email) = '');
 
 -- Conferir depois de rodar:
