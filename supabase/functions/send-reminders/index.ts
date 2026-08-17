@@ -298,6 +298,7 @@ Deno.serve(async (req: Request) => {
         // Falhar aqui NÃO muda o status: o cliente já foi avisado por
         // e-mail. Marcar o lembrete como falho por causa do reforço faria
         // o sistema reenviar tudo amanhã sem necessidade.
+        let sentWhatsapp = false;
         if (d.type === "3d") {
           const url3d = cleanUrl(Deno.env.get("REMINDER_WEBHOOK_3D_URL"));
           const phone = toWhatsApp(d.client.phone_digits ?? "");
@@ -306,7 +307,7 @@ Deno.serve(async (req: Request) => {
               const headers: Record<string, string> = { "Content-Type": "application/json" };
               const token = Deno.env.get("REMINDER_WEBHOOK_TOKEN");
               if (token) headers["Authorization"] = token;
-              await fetch(url3d, {
+              const waResp = await fetch(url3d, {
                 method: "POST",
                 headers,
                 body: JSON.stringify({
@@ -318,11 +319,29 @@ Deno.serve(async (req: Request) => {
                   month_key: d.monthKey,
                 }),
               });
+              const waText = await waResp.text();
+              // Mesmo critério do e-mail: só conta o que o canal aceitou
+              // de verdade. "mode" diferente de active é rascunho e não sai.
+              if (waResp.ok) {
+                try {
+                  const b = JSON.parse(waText);
+                  const mode = b?.data?.mode ?? b?.mode;
+                  sentWhatsapp = b?.success !== false && (!mode || mode === "active");
+                } catch { sentWhatsapp = true; }
+              }
             } catch { /* reforço não derruba o lembrete */ }
           }
         }
 
-        details.push({ client: d.client.name, type: d.type, to: d.to, status: "sent" });
+        // Por onde saiu — é isto que a aba Tarefas do Dia mostra, para a
+        // assistente não procurar no WhatsApp um lembrete de 7 dias que
+        // só existe por e-mail.
+        await supabase.from("reminder_log").update({
+          sent_email: true,
+          sent_whatsapp: sentWhatsapp,
+        }).eq("client_id", d.client.id).eq("month_key", d.monthKey).eq("reminder_type", d.type);
+
+        details.push({ client: d.client.name, type: d.type, to: d.to, status: "sent", whatsapp: sentWhatsapp });
       } else {
         // Não saiu: registra como falha, com o motivo escrito. Fica em
         // vermelho na aba Tarefas do Dia e é tentado de novo amanhã —

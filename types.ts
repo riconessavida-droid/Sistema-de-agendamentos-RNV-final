@@ -41,6 +41,7 @@ export interface Client {
   cpf?: string;             // só dígitos; validado no dígito verificador
   contractSignedAt?: string;
   contractIssue?: string;   // motivo da pendência (ex.: "CPF inválido"); undefined = ok
+  contractPdfUrl?: string;  // PDF assinado, baixado do D4Sign pelo d4sign-sync
   contractValue?: number;   // valor líquido fixado na época do contrato (após taxa)
   contractGrossValue?: number; // valor bruto fixado na época do contrato
   contractMachineRate?: number; // taxa fixada na época do contrato
@@ -108,6 +109,9 @@ export interface ReminderLogEntry {
   reminderType: ReminderType;
   status: string;          // sent | failed | skipped
   createdAt: string;       // ISO
+  /** Por onde saiu. O de 7 dias vai só por e-mail; o de 3, pelos dois. */
+  sentEmail: boolean;
+  sentWhatsapp: boolean;
 }
 
 /** Marca da assistente: "já conferi este no papo.ai". */

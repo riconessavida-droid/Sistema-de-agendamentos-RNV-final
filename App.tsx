@@ -53,6 +53,7 @@ const dbToClient = (row: DbClientRow): Client => ({
   cpf: (row as any).cpf ?? undefined,
   contractSignedAt: (row as any).contract_signed_at ?? undefined,
   contractIssue: (row as any).contract_issue ?? undefined,
+  contractPdfUrl: (row as any).contract_pdf_url ?? undefined,
   contractGrossValue: (row as any).contract_gross_value ?? undefined,
   contractMachineRate: (row as any).contract_machine_rate ?? undefined,
   contractValue: (row as any).contract_value ?? undefined,
@@ -246,7 +247,7 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
     if (!currentUser) return;
 
     const [logRes, checkRes] = await Promise.all([
-      supabase.from('reminder_log').select('client_id, month_key, reminder_type, status, created_at'),
+      supabase.from('reminder_log').select('client_id, month_key, reminder_type, status, created_at, sent_email, sent_whatsapp'),
       supabase.from('reminder_checks').select('client_id, month_key, reminder_type, checked_at, note')
     ]);
 
@@ -256,7 +257,9 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
         monthKey: r.month_key,
         reminderType: r.reminder_type as ReminderType,
         status: r.status,
-        createdAt: r.created_at
+        createdAt: r.created_at,
+        sentEmail: r.sent_email === true,
+        sentWhatsapp: r.sent_whatsapp === true
       })));
     }
 
@@ -1413,6 +1416,28 @@ const billingData = useMemo(() => {
                                   <FileSignature className="w-2.5 h-2.5" />
                                   {client.contractSigned ? 'Contrato Assinado' : 'Contrato Pendente'}
                                 </button>
+                                {/*
+                                  O PDF que o d4sign-sync baixou. Só aparece
+                                  quando existe — sem isso o arquivo ficaria
+                                  guardado no banco sem nenhum jeito de
+                                  chegar nele pela tela.
+                                */}
+                                {client.contractPdfUrl && (
+                                  <a
+                                    href={client.contractPdfUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={`text-[8px] font-black px-2 py-0.5 rounded-full uppercase mt-1 ml-1 inline-flex items-center gap-1 transition-all ${
+                                      orange
+                                        ? 'bg-white/30 text-white hover:bg-white/40'
+                                        : 'bg-slate-100 text-slate-600 border border-slate-300 hover:bg-slate-200'
+                                    }`}
+                                    title="Baixar o contrato assinado (PDF do D4Sign)"
+                                  >
+                                    <Download className="w-2.5 h-2.5" />
+                                    Baixar PDF
+                                  </a>
+                                )}
                                 {/* Preencheu errado: mostra o motivo pra assistente saber o que cobrar */}
                                 {client.contractIssue && (
                                   <p className={`text-[9px] font-black mt-0.5 leading-tight ${orange ? 'text-white' : 'text-red-600'}`}>
@@ -1751,7 +1776,12 @@ const billingData = useMemo(() => {
     item: DayReminderItem,
     type: ReminderType,
     day: Date
-  ): { state: 'sent' | 'queued' | 'late' | 'missing'; at: string | null } => {
+  ): {
+    state: 'sent' | 'queued' | 'late' | 'missing';
+    at: string | null;
+    byEmail?: boolean;
+    byWhatsapp?: boolean;
+  } => {
     const entry = reminderLog.find(
       r => r.clientId === item.client.id && r.monthKey === item.monthKey && r.reminderType === type
     );
@@ -1760,7 +1790,9 @@ const billingData = useMemo(() => {
       const at = new Date(entry.createdAt);
       return {
         state: 'sent',
-        at: at.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+        at: at.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }),
+        byEmail: entry.sentEmail,
+        byWhatsapp: entry.sentWhatsapp
       };
     }
 
@@ -1895,7 +1927,7 @@ const billingData = useMemo(() => {
    * conversa no papo.ai, o que o sistema fez e o "já conferi".
    */
   const renderReminderCard = (item: DayReminderItem, type: ReminderType, day: Date) => {
-    const { state, at } = reminderStateOf(item, type, day);
+    const { state, at, byEmail, byWhatsapp } = reminderStateOf(item, type, day);
     const checkKey = `${item.client.id}|${item.monthKey}|${type}`;
     const checked = Boolean(reminderChecks[checkKey]);
     const phoneDigits = (item.client.phoneDigits ?? '').replace(/\D/g, '');
@@ -1951,8 +1983,31 @@ const billingData = useMemo(() => {
 
         <div className="mt-2 flex items-center justify-between gap-2">
           {state === 'sent' && (
-            <span className="text-[9px] font-black uppercase tracking-wider text-emerald-600 bg-emerald-100 px-2 py-1 rounded-md">
-              ✅ Enviado {at}
+            <span className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[9px] font-black uppercase tracking-wider text-emerald-600 bg-emerald-100 px-2 py-1 rounded-md">
+                ✅ Enviado {at}
+              </span>
+              {/*
+                Por onde saiu. O lembrete de 7 dias vai SÓ por e-mail; o de
+                3 dias vai pelos dois. Sem estes símbolos a assistente
+                procura no papo.ai uma mensagem de 7 dias que nunca existiu.
+              */}
+              {byEmail && (
+                <span
+                  className="text-[9px] font-black text-sky-700 bg-sky-100 px-1.5 py-1 rounded-md"
+                  title="Enviado por e-mail"
+                >
+                  ✉️ E-mail
+                </span>
+              )}
+              {byWhatsapp && (
+                <span
+                  className="text-[9px] font-black text-green-700 bg-green-100 px-1.5 py-1 rounded-md"
+                  title="Também enviado no WhatsApp — dá para conferir no papo.ai"
+                >
+                  💬 WhatsApp
+                </span>
+              )}
             </span>
           )}
           {state === 'queued' && (
@@ -2088,7 +2143,7 @@ const billingData = useMemo(() => {
                 <div className="flex items-center gap-2 mb-3">
                   <div className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
                   <span className="text-[10px] font-black uppercase tracking-widest text-red-500">
-                    Lembrete 3 dias — reunião em 3 dias
+                    Lembrete 3 dias <span className="text-slate-400">· ✉️ e 💬</span>
                   </span>
                   <span className="ml-auto text-[10px] font-black bg-red-50 text-red-500 px-2 py-0.5 rounded-full">
                     {tres.length}
@@ -2106,7 +2161,7 @@ const billingData = useMemo(() => {
                 <div className="flex items-center gap-2 mb-3">
                   <div className="w-2 h-2 rounded-full bg-yellow-500 flex-shrink-0" />
                   <span className="text-[10px] font-black uppercase tracking-widest text-yellow-600">
-                    Lembrete 7 dias — reunião em 7 dias
+                    Lembrete 7 dias <span className="text-slate-400">· só ✉️</span>
                   </span>
                   <span className="ml-auto text-[10px] font-black bg-yellow-50 text-yellow-600 px-2 py-0.5 rounded-full">
                     {sete.length}
