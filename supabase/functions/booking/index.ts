@@ -297,37 +297,66 @@ const toWhatsApp = (digits: string | null): string | null => {
 };
 
 /**
- * Confirmação no WhatsApp do cliente, logo depois de agendar.
- * Falhar aqui não desfaz nada — o agendamento já está gravado.
+ * Confirmação por e-mail, logo depois de agendar.
+ *
+ * Era WhatsApp até 17/08/2026. Trocado porque a cadeia do WhatsApp tem
+ * três donos (WABA de terceiro, papo.ai e Meta) e nenhum deles é a RNV —
+ * em dez dias isso custou um número perdido e cinco dias de silêncio. O
+ * domínio é nosso, e quem manda é a função send-email.
+ *
+ * Falhar aqui NÃO desfaz nada: o agendamento já está gravado, e ficar sem
+ * o e-mail de confirmação é muito menos grave que perder a reunião.
  */
 async function sendConfirmation(supabase: any, input: {
   appointmentId: string; name: string; phone: string | null;
   email: string | null; startsAt: Date; manageToken: string;
+  meetUrl?: string | null;
 }): Promise<void> {
-  const url = cleanUrl(Deno.env.get("PAPO_WEBHOOK_CONFIRMACAO_URL"));
-  const siteUrl = cleanUrl(Deno.env.get("SITE_URL"));
-  const phone = toWhatsApp(input.phone);
-  if (!url || !phone) return;
+  const email = cleanText(input.email);
 
-  const payload = {
-    phone,
-    first_name: cleanText(firstName(input.name)),
-    full_name: cleanText(input.name),
-    email: cleanText(input.email),
-    meeting_label: cleanText(meetingLabel(input.startsAt)),
-    meeting_url: cleanUrl(`${siteUrl}/r/${input.manageToken}`)
-  };
+  // Sem endereço não há o que enviar — mas fica registrado, porque é
+  // isso que faz o caso aparecer na tela em vez de sumir.
+  if (!email || !email.includes("@")) {
+    await supabase.from("scheduling_notifications").insert({
+      kind: "confirmation",
+      appointment_id: input.appointmentId,
+      ok: false,
+      detail: "cliente sem e-mail"
+    });
+    return;
+  }
+
+  const siteUrl = cleanUrl(Deno.env.get("SITE_URL"));
 
   let ok = false;
   let detail: string | null = null;
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    ok = response.ok;
-    if (!ok) detail = `HTTP ${response.status}`;
+    const response = await fetch(
+      `${Deno.env.get("SUPABASE_URL")}/functions/v1/send-email`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`
+        },
+        body: JSON.stringify({
+          template: "confirmacao",
+          to: email,
+          data: {
+            first_name: firstName(input.name),
+            full_name: input.name,
+            meeting_label: meetingLabel(input.startsAt),
+            // O link do Meet é o que o cliente quer na hora. Sem ele,
+            // o e-mail explica que chega pelo convite do Google Agenda.
+            meet_url: input.meetUrl ?? null,
+            manage_url: siteUrl ? `${siteUrl}/r/${input.manageToken}` : null
+          }
+        })
+      }
+    );
+    const body = await response.json().catch(() => null);
+    ok = response.ok && body?.ok === true;
+    if (!ok) detail = body?.error ?? `HTTP ${response.status}`;
   } catch (e) {
     detail = String(e);
   }
@@ -758,7 +787,7 @@ Deno.serve(async (req: Request) => {
       meet_error: meet.error ?? null
     }).eq("id", created.id);
 
-    // Confirmação no WhatsApp. Vai depois do Meet de propósito, para a
+    // Confirmação por e-mail. Vai depois do Meet de propósito, para a
     // mensagem já poder levar o link da videochamada.
     await sendConfirmation(supabase, {
       appointmentId: created.id,
@@ -766,7 +795,8 @@ Deno.serve(async (req: Request) => {
       phone,
       email,
       startsAt,
-      manageToken
+      manageToken,
+      meetUrl: meet.meetUrl ?? null
     });
 
     return json({

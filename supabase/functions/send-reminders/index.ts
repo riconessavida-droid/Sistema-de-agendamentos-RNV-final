@@ -1,25 +1,22 @@
 // =====================================================================
 // Edge Function: send-reminders
 // Roda 1x/dia (via cron). Para cada cliente ATIVO, calcula a próxima
-// reunião (última reunião feita + ~30 dias) e dispara lembrete:
-//   - 7 dias antes  -> POST no webhook do parceiro (template 7 dias)
-//   - 3 dias antes  -> POST no webhook do parceiro (template 3 dias)
-// Regras: NÃO manda se o cliente já agendou aquele mês; NÃO repete um
-// lembrete já enviado (reminder_log); a 2ª mensagem não sai se ele agendou
-// depois da 1ª (a data preenchida faz pular).
+// reunião (última reunião feita + ~30 dias) e dispara o lembrete:
+//   - 7 dias antes  -> e-mail "vamos marcar sua próxima consultoria?"
+//   - 3 dias antes  -> e-mail "sua próxima consultoria ainda está sem data"
+// Regras: NÃO manda se o cliente já agendou; NÃO repete um lembrete já
+// enviado (reminder_log); a 2ª mensagem não sai se ele agendou depois da 1ª.
 //
-// O ENVIO em si é feito pela plataforma do parceiro (empresa da IA que já
-// usa o número da assistente). Nosso sistema só faz um POST para o
-// "webhook de entrada" deles, com os dados do destinatário; eles enviam
-// o template aprovado. Assim usamos o número da assistente sem conflito.
+// O ENVIO era por WhatsApp (webhook do papo.ai) até 17/08/2026. Virou
+// e-mail porque aquela cadeia tinha três donos — WABA de terceiro,
+// plataforma do parceiro e aprovação da Meta — e nenhum deles é a RNV.
+// Em dez dias custou um número perdido, três quedas de canal e cinco dias
+// de lembretes que o log dava como enviados sem ninguém receber. Quem
+// envia agora é a função send-email, com o domínio da própria RNV.
 //
-// Segredos:
-//   REMINDER_WEBHOOK_7D_URL  -> webhook do parceiro que envia o template de 7 dias
-//   REMINDER_WEBHOOK_3D_URL  -> webhook do parceiro que envia o template de 3 dias
-//   REMINDER_WEBHOOK_TOKEN   -> (opcional) valor do header Authorization, se exigirem
+// Segredos: nenhum aqui. A chave do provedor vive na send-email.
 //
 // Modo teste: POST {"dryRun": true}  -> não envia, só retorna quem receberia.
-// Sem as URLs configuradas -> dry-run automático.
 //
 // Deploy COM verify-jwt LIGADO (chamado pelo cron com a anon key).
 // =====================================================================
@@ -110,11 +107,8 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
 
-  const url7d = cleanUrl(Deno.env.get("REMINDER_WEBHOOK_7D_URL"));
-  const url3d = cleanUrl(Deno.env.get("REMINDER_WEBHOOK_3D_URL"));
-  const authHeader = Deno.env.get("REMINDER_WEBHOOK_TOKEN"); // opcional
   const siteUrl = cleanUrl(Deno.env.get("SITE_URL"));
-  let dryRun = !url7d && !url3d;
+  let dryRun = false;
   try { const b = await req.json(); if (b?.dryRun === true) dryRun = true; } catch { /* sem body */ }
 
   const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
@@ -125,7 +119,7 @@ Deno.serve(async (req: Request) => {
   const todayUTC = Date.UTC(ty, tm - 1, td);
 
   const { data: clientsRaw, error } = await supabase
-    .from("clients").select("id, name, phone_digits, start_date, start_month_year, extra_meetings, status_by_month");
+    .from("clients").select("id, name, email, phone_digits, start_date, start_month_year, extra_meetings, status_by_month");
   if (error) return json({ error: error.message }, 500);
   const clients = clientsRaw ?? [];
 
@@ -210,67 +204,74 @@ Deno.serve(async (req: Request) => {
 
     if (alreadySent.has(`${c.id}|${nextMonthKey}|${type}`)) continue;
 
-    due.push({ client: c, type, monthKey: nextMonthKey, daysUntil, to: toWhatsApp(c.phone_digits) });
+    // O destino agora é o e-mail. Era o WhatsApp até 17/08/2026 — trocado
+    // porque aquela cadeia tem três donos e nenhum é a RNV.
+    due.push({ client: c, type, monthKey: nextMonthKey, daysUntil, to: cleanText(c.email) });
   }
 
-  const summary = { total: due.length, sent: 0, failed: 0, skippedNoPhone: 0, skippedNoUrl: 0, dryRun };
+  const summary = { total: due.length, sent: 0, failed: 0, skippedNoEmail: 0, dryRun };
   const details: any[] = [];
 
   for (const d of due) {
-    if (!d.to) {
-      summary.skippedNoPhone++;
-      details.push({ client: d.client.name, type: d.type, status: "no_phone" });
+    if (!d.to || !d.to.includes("@")) {
+      // Não é erro do envio: é cadastro incompleto. Fica registrado como
+      // falha no log para aparecer em vermelho na aba Tarefas do Dia, que
+      // é onde a assistente resolve.
+      summary.skippedNoEmail++;
+      await supabase.from("reminder_log").upsert(
+        { client_id: d.client.id, month_key: d.monthKey, reminder_type: d.type, status: "failed", detail: "cliente sem e-mail cadastrado" },
+        { onConflict: "client_id,month_key,reminder_type" },
+      );
+      details.push({ client: d.client.name, type: d.type, status: "no_email" });
       continue;
     }
 
     const payload = {
-      phone: d.to,
-      first_name: cleanText(firstName(d.client.name)),
-      full_name: cleanText(d.client.name),
-      reminder_type: d.type,
-      month_key: d.monthKey,
-      // O link agora vai como parâmetro do template, não escrito dentro
-      // dele — por isso trocar de domínio nunca mais exige reaprovação.
-      booking_url: await bookingUrlFor(supabase, d.client.id, siteUrl),
+      template: d.type === "7d" ? "cobranca7" : "cobranca3",
+      to: d.to,
+      data: {
+        first_name: firstName(d.client.name),
+        full_name: d.client.name,
+        booking_url: await bookingUrlFor(supabase, d.client.id, siteUrl),
+      },
     };
 
     if (dryRun) {
-      details.push({ ...payload, status: "dry" });
+      details.push({ client: d.client.name, type: d.type, to: d.to, status: "dry" });
       continue;
     }
 
-    const targetUrl = d.type === "7d" ? url7d : url3d;
-    if (!targetUrl) {
-      summary.skippedNoUrl++;
-      details.push({ client: d.client.name, type: d.type, status: "no_url" });
-      continue;
-    }
+    const targetUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/send-email`;
 
     try {
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (authHeader) headers["Authorization"] = authHeader;
-      const resp = await fetch(targetUrl, { method: "POST", headers, body: JSON.stringify(payload) });
+      const resp = await fetch(targetUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+        },
+        body: JSON.stringify(payload),
+      });
       const text = await resp.text();
 
-      // HTTP 200 do papo.ai NÃO significa mensagem entregue — ele responde
-      // "success" só por ter aceitado o POST. Em 08–13/ago/2026 o canal do
-      // WhatsApp ficou desconectado, o webhook seguiu respondendo 200, e
-      // 19 lembretes foram gravados como enviados sem nunca sair. Como o
-      // dedupe olha o log, esses clientes ficaram silenciados de vez.
+      // Só conta como enviado o que o provedor ACEITOU DE VERDADE.
       //
-      // Agora o corpo da resposta é lido: só conta como enviado o que veio
-      // com success != false E mode "active". Rascunho (mode "test") ou
-      // recusa viram "failed" — e failed é retentado no dia seguinte.
+      // A lição vem do WhatsApp: entre 08 e 13/08/2026 o canal ficou
+      // desconectado, o papo.ai seguiu respondendo 200 por "ter aceitado o
+      // POST", e 19 lembretes foram gravados como enviados sem nunca sair.
+      // Como o dedupe olha o log, aqueles clientes ficaram silenciados até
+      // alguém apagar as linhas na mão.
+      //
+      // A send-email devolve {ok:true, id} quando o Resend aceitou, e
+      // {ok:false, error} em qualquer outro caso. Nada de otimismo aqui.
       const accepted = (() => {
         if (!resp.ok) return { ok: false, why: `HTTP ${resp.status}` };
         try {
           const body = JSON.parse(text);
-          if (body?.success === false) return { ok: false, why: "papo.ai recusou (success=false)" };
-          const mode = body?.data?.mode ?? body?.mode;
-          if (mode && mode !== "active") return { ok: false, why: `webhook em modo "${mode}", não dispara` };
+          if (body?.ok !== true) return { ok: false, why: body?.error ?? "envio recusado" };
           return { ok: true, why: "" };
         } catch {
-          return { ok: true, why: "" };   // resposta não-JSON: confia no 200
+          return { ok: false, why: "resposta ilegível do envio" };
         }
       })();
 
@@ -287,26 +288,24 @@ Deno.serve(async (req: Request) => {
         sbm[d.monthKey] = { status: "PENDING", ...(sbm[d.monthKey] ?? {}), notified: true };
         await supabase.from("clients").update({ status_by_month: sbm }).eq("id", d.client.id);
 
-        details.push({ client: d.client.name, type: d.type, status: "sent" });
-      } else if (resp.ok) {
-        // Aceito pelo papo.ai mas não vai sair: registra como falha para
-        // aparecer em vermelho na aba Tarefas do Dia e ser tentado de novo.
+        details.push({ client: d.client.name, type: d.type, to: d.to, status: "sent" });
+      } else {
+        // Não saiu: registra como falha, com o motivo escrito. Fica em
+        // vermelho na aba Tarefas do Dia e é tentado de novo amanhã —
+        // falha nunca silencia o cliente até o fim do ciclo.
         summary.failed++;
         await supabase.from("reminder_log").upsert(
           { client_id: d.client.id, month_key: d.monthKey, reminder_type: d.type, status: "failed", detail: `${accepted.why}: ${text.slice(0, 160)}` },
           { onConflict: "client_id,month_key,reminder_type" },
         );
         details.push({ client: d.client.name, type: d.type, status: "failed", why: accepted.why });
-      } else {
-        summary.failed++;
-        await supabase.from("reminder_log").upsert(
-          { client_id: d.client.id, month_key: d.monthKey, reminder_type: d.type, status: "failed", detail: `${resp.status}: ${text.slice(0, 200)}` },
-          { onConflict: "client_id,month_key,reminder_type" },
-        );
-        details.push({ client: d.client.name, type: d.type, status: "failed", http: resp.status });
       }
     } catch (e) {
       summary.failed++;
+      await supabase.from("reminder_log").upsert(
+        { client_id: d.client.id, month_key: d.monthKey, reminder_type: d.type, status: "failed", detail: String(e).slice(0, 200) },
+        { onConflict: "client_id,month_key,reminder_type" },
+      );
       details.push({ client: d.client.name, type: d.type, status: "error", error: String(e) });
     }
   }

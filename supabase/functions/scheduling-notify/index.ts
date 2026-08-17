@@ -8,9 +8,7 @@
 //
 // Deploy:  verify-jwt DESLIGADO (quem chama é o cron do banco).
 // Segredos:
-//   PAPO_WEBHOOK_VESPERA_URL     webhook de entrada "Lembrete véspera"
-//   PAPO_WEBHOOK_RESUMO_URL      webhook de entrada "Resumo do dia"
-//   ADMIN_PHONE                  telefone do Eduardo, com DDI (55...)
+//   ADMIN_EMAIL                  e-mail do Eduardo, para o resumo do dia
 //   SITE_URL                     endereço público do sistema
 //
 // Body {"dryRun": true} simula tudo sem enviar (bom para conferir).
@@ -94,21 +92,32 @@ const cleanText = (value: string | null | undefined): string =>
 const cleanUrl = (value: string | null | undefined): string =>
   (value ?? "").replace(/\s+/g, "").replace(/\/+$/, "");
 
-/** O papo.ai exige DDI + DDD + número. */
-const toWhatsApp = (digits: string | null): string | null => {
-  const clean = (digits ?? "").replace(/\D/g, "");
-  if (clean.length < 10) return null;
-  return clean.startsWith("55") ? clean : `55${clean}`;
-};
-
-async function postWebhook(url: string, payload: unknown): Promise<{ ok: boolean; detail?: string }> {
+/**
+ * Envia pela função send-email, que é o único lugar que fala com o
+ * provedor e sabe o layout.
+ *
+ * Só conta como enviado o que o provedor aceitou de verdade — a
+ * send-email devolve {ok:true, id}. Foi confiar no "aceitei o POST" do
+ * WhatsApp que escondeu cinco dias de silêncio em agosto/2026.
+ */
+async function sendEmail(
+  template: string,
+  to: string,
+  data: Record<string, unknown>
+): Promise<{ ok: boolean; detail?: string }> {
   try {
-    const response = await fetch(url, {
+    const response = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/send-email`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload)
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`
+      },
+      body: JSON.stringify({ template, to, data })
     });
-    if (!response.ok) return { ok: false, detail: `HTTP ${response.status}` };
+    const body = await response.json().catch(() => null);
+    if (!response.ok || body?.ok !== true) {
+      return { ok: false, detail: body?.error ?? `HTTP ${response.status}` };
+    }
     return { ok: true };
   } catch (e) {
     return { ok: false, detail: String(e) };
@@ -119,14 +128,12 @@ Deno.serve(async (req: Request) => {
   let body: any = {};
   try { body = await req.json(); } catch { /* cron chama sem corpo */ }
 
-  const vesperaUrl = cleanUrl(Deno.env.get("PAPO_WEBHOOK_VESPERA_URL"));
-  const resumoUrl = cleanUrl(Deno.env.get("PAPO_WEBHOOK_RESUMO_URL"));
-  const adminPhone = cleanText(Deno.env.get("ADMIN_PHONE"));
+  const adminEmail = cleanText(Deno.env.get("ADMIN_EMAIL"));
   const siteUrl = cleanUrl(Deno.env.get("SITE_URL"));
 
-  // Sem as URLs configuradas, roda em seco automaticamente — nunca falha
-  // silenciosamente nem manda para lugar nenhum.
-  const dryRun = body?.dryRun === true || !vesperaUrl || !resumoUrl;
+  // Sem o e-mail do Eduardo o resumo não tem para onde ir; o lembrete de
+  // véspera continua valendo, porque vai para o cliente.
+  const dryRun = body?.dryRun === true;
 
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
@@ -155,9 +162,18 @@ Deno.serve(async (req: Request) => {
   // Nome do cliente cadastrado ganha do nome digitado no agendamento.
   const clientIds = meetings.map(m => m.client_id).filter(Boolean);
   const { data: clients } = clientIds.length
-    ? await supabase.from("clients").select("id, name, phone_digits").in("id", clientIds)
+    ? await supabase.from("clients").select("id, name, email, phone_digits, contract_signed").in("id", clientIds)
     : { data: [] as any[] };
-  const clientById = new Map((clients ?? []).map((c: any) => [c.id, c]));
+  type ClientRow = {
+    id: string;
+    name: string | null;
+    email: string | null;
+    phone_digits: string | null;
+    contract_signed: boolean | null;
+  };
+  const clientById = new Map<string, ClientRow>(
+    (clients ?? []).map((c: any) => [c.id as string, c as ClientRow])
+  );
 
   // ----------------------------------------------------- lembrete véspera
   const reminders: any[] = [];
@@ -165,11 +181,13 @@ Deno.serve(async (req: Request) => {
   for (const meeting of meetings) {
     const client = meeting.client_id ? clientById.get(meeting.client_id) : null;
     const name = client?.name ?? meeting.attendee_name ?? "";
-    const phone = toWhatsApp(meeting.attendee_phone ?? client?.phone_digits ?? null);
+    // O e-mail digitado no agendamento ganha do cadastro: é o que a
+    // pessoa acabou de informar, e por onde ela espera ser avisada.
+    const email = cleanText(meeting.attendee_email || client?.email || "");
     const startsAt = new Date(meeting.starts_at);
 
-    if (!phone) {
-      reminders.push({ id: meeting.id, name, skipped: "sem telefone" });
+    if (!email || !email.includes("@")) {
+      reminders.push({ id: meeting.id, name, skipped: "sem e-mail" });
       continue;
     }
 
@@ -184,67 +202,63 @@ Deno.serve(async (req: Request) => {
     }
 
     const payload = {
-      phone,
-      first_name: cleanText(firstName(name)),
-      full_name: cleanText(name),
-      email: cleanText(meeting.attendee_email),
-      meeting_label: cleanText(meetingLabel(startsAt)),
-      meeting_url: cleanUrl(`${siteUrl}/r/${meeting.manage_token}`)
+      first_name: firstName(name),
+      full_name: name,
+      meeting_label: meetingLabel(startsAt),
+      meeting_time: toTimeKey(startsAt),
+      meet_url: meeting.meet_url ?? null,
+      manage_url: siteUrl ? `${siteUrl}/r/${meeting.manage_token}` : null
     };
 
     if (dryRun) {
-      reminders.push({ id: meeting.id, name, dryRun: true, payload });
+      reminders.push({ id: meeting.id, name, to: email, dryRun: true, payload });
       continue;
     }
 
-    const sent = await postWebhook(vesperaUrl!, payload);
+    const sent = await sendEmail("vespera", email, payload);
     await supabase.from("scheduling_notifications").insert({
       kind: "day_before",
       appointment_id: meeting.id,
       ok: sent.ok,
       detail: sent.detail ?? null
     });
-    reminders.push({ id: meeting.id, name, sent: sent.ok, detail: sent.detail });
+    reminders.push({ id: meeting.id, name, to: email, sent: sent.ok, detail: sent.detail });
   }
 
   // -------------------------------------------------------- resumo do dia
   const times = meetings.map(m => toTimeKey(new Date(m.starts_at))).sort();
 
-  /**
-   * "08:30 Livia Helena · 09:30 Lucas Coppedê · 14:00 Samara Oliveira"
-   *
-   * Vai tudo numa linha só de propósito: a Meta REJEITA parâmetro de
-   * template que contenha quebra de linha. O separador " · " é o que mais
-   * se aproxima de uma lista sem quebrar a regra.
-   *
-   * Só os dois primeiros nomes, para a linha não estourar num dia cheio.
-   */
   const shortName = (full: string): string =>
     cleanText(full).split(" ").filter(Boolean).slice(0, 2).join(" ");
 
-  const meetingList = meetings
+  /**
+   * No WhatsApp isto era uma linha só ("08:30 Livia · 09:30 Lucas"),
+   * porque a Meta rejeita parâmetro de template com quebra de linha. No
+   * e-mail a limitação some: vira uma tabela de verdade, com horário e
+   * nome em colunas.
+   *
+   * `contract_pending` marca quem vai sentar com o Eduardo sem ter
+   * assinado — assim ele vê isso de manhã, sem precisar de outro aviso.
+   */
+  const meetingRows = meetings
     .slice()
     .sort((a, b) => String(a.starts_at).localeCompare(String(b.starts_at)))
     .map(m => {
       const client = m.client_id ? clientById.get(m.client_id) : null;
-      const name = shortName(client?.name ?? m.attendee_name ?? "sem nome");
-      return `${toTimeKey(new Date(m.starts_at))} ${name}`;
-    })
-    .join(" · ");
+      return {
+        time: toTimeKey(new Date(m.starts_at)),
+        name: shortName(client?.name ?? m.attendee_name ?? "sem nome"),
+        contract_pending: client ? client.contract_signed === false : false
+      };
+    });
 
   const summaryPayload = {
-    phone: toWhatsApp(adminPhone) ?? "",
-    first_name: "Eduardo",
-    full_name: "Eduardo Stetner",
     summary_date: `${tomorrow.slice(8)}/${tomorrow.slice(5, 7)}`,
     meeting_count: String(meetings.length),
     first_time: times[0],
     last_time: times[times.length - 1],
-    // A lista com horário e nome de cada reunião. Os campos acima
-    // continuam sendo enviados para o template atual não quebrar
-    // enquanto o novo não é aprovado.
-    meeting_list: cleanText(meetingList),
-    day_url: cleanUrl(`${siteUrl}/dia/${tomorrow}`)
+    meetings: meetingRows,
+    day_url: siteUrl ? `${siteUrl}/dia/${tomorrow}` : null
   };
 
   let summary: any = { dryRun: true, payload: summaryPayload };
@@ -255,8 +269,8 @@ Deno.serve(async (req: Request) => {
 
   if (summarySent) {
     summary = { skipped: "já enviado" };
-  } else if (!dryRun && summaryPayload.phone) {
-    const sent = await postWebhook(resumoUrl!, summaryPayload);
+  } else if (!dryRun && adminEmail) {
+    const sent = await sendEmail("resumo", adminEmail, summaryPayload);
     await supabase.from("scheduling_notifications").insert({
       kind: "daily_digest",
       ref_day: tomorrow,
@@ -264,6 +278,8 @@ Deno.serve(async (req: Request) => {
       detail: sent.detail ?? null
     });
     summary = { sent: sent.ok, detail: sent.detail };
+  } else if (!adminEmail) {
+    summary = { skipped: "ADMIN_EMAIL não configurado" };
   }
 
   return json({ ok: true, dryRun, day: tomorrow, meetings: meetings.length, reminders, summary });
