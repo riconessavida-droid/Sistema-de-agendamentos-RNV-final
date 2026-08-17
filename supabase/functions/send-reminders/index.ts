@@ -288,6 +288,40 @@ Deno.serve(async (req: Request) => {
         sbm[d.monthKey] = { status: "PENDING", ...(sbm[d.monthKey] ?? {}), notified: true };
         await supabase.from("clients").update({ status_by_month: sbm }).eq("id", d.client.id);
 
+        // ------------------------------------------- reforço no WhatsApp
+        //
+        // Só no lembrete de 3 dias, e só DEPOIS do e-mail ter dado certo.
+        // O WhatsApp tem leitura muito maior, mas a cadeia dele tem três
+        // donos e já caiu três vezes em dez dias — por isso ele entra como
+        // segunda via, nunca como o canal que decide.
+        //
+        // Falhar aqui NÃO muda o status: o cliente já foi avisado por
+        // e-mail. Marcar o lembrete como falho por causa do reforço faria
+        // o sistema reenviar tudo amanhã sem necessidade.
+        if (d.type === "3d") {
+          const url3d = cleanUrl(Deno.env.get("REMINDER_WEBHOOK_3D_URL"));
+          const phone = toWhatsApp(d.client.phone_digits ?? "");
+          if (url3d && phone) {
+            try {
+              const headers: Record<string, string> = { "Content-Type": "application/json" };
+              const token = Deno.env.get("REMINDER_WEBHOOK_TOKEN");
+              if (token) headers["Authorization"] = token;
+              await fetch(url3d, {
+                method: "POST",
+                headers,
+                body: JSON.stringify({
+                  phone,
+                  first_name: cleanText(firstName(d.client.name)),
+                  full_name: cleanText(d.client.name),
+                  booking_url: payload.data.booking_url,
+                  reminder_type: d.type,
+                  month_key: d.monthKey,
+                }),
+              });
+            } catch { /* reforço não derruba o lembrete */ }
+          }
+        }
+
         details.push({ client: d.client.name, type: d.type, to: d.to, status: "sent" });
       } else {
         // Não saiu: registra como falha, com o motivo escrito. Fica em
