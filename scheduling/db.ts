@@ -112,7 +112,7 @@ export const loadSchedulingData = async (
   const rangeStart = zonedToInstant(fromDay, '00:00').toISOString();
   const rangeEnd = zonedToInstant(addDays(toDay, 1), '00:00').toISOString();
 
-  const [settingsRes, rulesRes, blocksRes, appointmentsRes, overridesRes] = await Promise.all([
+  const [settingsRes, rulesRes, blocksRes, appointmentsRes, overridesRes, eagendaRes] = await Promise.all([
     supabase.from('scheduling_settings').select('*').eq('id', 1).maybeSingle(),
     supabase.from('availability_rules').select('*').order('weekday').order('start_time'),
     supabase.from('schedule_blocks').select('*').order('date_from'),
@@ -122,13 +122,48 @@ export const loadSchedulingData = async (
       .gte('starts_at', rangeStart)
       .lt('starts_at', rangeEnd)
       .order('starts_at'),
-    supabase.from('holiday_overrides').select('*')
+    supabase.from('holiday_overrides').select('*'),
+    // Enquanto o eAgenda existir, quem agendou LÁ também ocupa o horário
+    // AQUI. A página pública já lia isso ao vivo desde 11/08; esta tela
+    // não, e por isso mostrava como livre um horário já tomado — foi assim
+    // que uma cliente marcou por cima de um compromisso do eAgenda.
+    supabase
+      .from('eagenda_bookings')
+      .select('appointment_key, attendee_name, start_datetime, event_status')
+      .eq('event_status', 'CONFIRMED')
+      .gte('start_datetime', rangeStart)
+      .lt('start_datetime', rangeEnd)
   ]);
+
+  /**
+   * Vira bloqueio na hora, sem gravar nada: a fonte da verdade continua
+   * sendo a tabela do eAgenda. Se um agendamento for cancelado lá, o
+   * horário reabre aqui sozinho na próxima carga — o que não aconteceria
+   * com bloqueios copiados para dentro do nosso banco.
+   *
+   * O id negativo evita colidir com os bloqueios reais e deixa claro, para
+   * quem for mexer depois, que esta linha não existe em schedule_blocks.
+   */
+  const eagendaBlocks: ScheduleBlock[] = (eagendaRes.data ?? []).map((row: any, i: number) => {
+    const instant = new Date(row.start_datetime);
+    const day = toDayKey(instant);
+    const from = toTimeKey(instant);
+    const to = toTimeKey(new Date(instant.getTime() + 60 * 60 * 1000));
+    return {
+      id: -(i + 1),
+      dateFrom: day,
+      dateTo: null,
+      timeFrom: from,
+      timeTo: to,
+      reason: `eAgenda — ${row.attendee_name ?? 'agendamento'}`,
+      source: 'eagenda' as const
+    };
+  });
 
   return {
     settings: settingsRes.data ? dbToSettings(settingsRes.data) : DEFAULT_SETTINGS,
     rules: (rulesRes.data ?? []).map(dbToRule),
-    blocks: (blocksRes.data ?? []).map(dbToBlock),
+    blocks: [...(blocksRes.data ?? []).map(dbToBlock), ...eagendaBlocks],
     appointments: (appointmentsRes.data ?? []).map(dbToAppointment),
     holidayOverrides: (overridesRes.data ?? []).map((row: any) => ({
       day: row.day,
