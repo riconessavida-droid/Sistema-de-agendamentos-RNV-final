@@ -164,7 +164,18 @@ export const slotStates = (
   fromDay: DayKey,
   toDay: DayKey,
   input: AvailabilityInput
-): Array<Slot & { state: SlotState; appointment?: Appointment }> => {
+): Array<Slot & {
+  state: SlotState;
+  appointment?: Appointment;
+  /**
+   * Qual bloqueio fechou este horário. Sem isso a tela mostra "bloqueado"
+   * e não tem como desfazer — o admin veria o cadeado sem saber qual linha
+   * apagar. Vem só nos bloqueios manuais: os que espelham o eAgenda não se
+   * desfazem por aqui, se desfazem lá.
+   */
+  blockId?: number;
+  blockReason?: string;
+}> => {
   const { now, rules, blocks, appointments, settings, holidayOverrides } = input;
 
   const today = toDayKey(now);
@@ -188,8 +199,16 @@ export const slotStates = (
     const appointment = byInstant.get(slot.startsAt.getTime());
     if (appointment) return { ...slot, state: 'booked' as const, appointment };
     if (holidays.has(slot.day)) return { ...slot, state: 'holiday' as const };
-    if (blocks.some(block => blockHitsSlot(block, slot, settings.slotDurationMinutes))) {
-      return { ...slot, state: 'blocked' as const };
+    const hit = blocks.find(block => blockHitsSlot(block, slot, settings.slotDurationMinutes));
+    if (hit) {
+      return {
+        ...slot,
+        state: 'blocked' as const,
+        // Id negativo = bloqueio espelhado do eAgenda, que não existe no
+        // nosso banco e por isso não pode ser removido daqui.
+        blockId: hit.source === 'manual' && hit.id > 0 ? hit.id : undefined,
+        blockReason: hit.reason
+      };
     }
     if (slot.startsAt.getTime() < earliestStart) return { ...slot, state: 'too_soon' as const };
     if (daysBetween(today, slot.day) > settings.maxAdvanceDays) {

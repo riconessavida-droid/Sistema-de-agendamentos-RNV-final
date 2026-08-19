@@ -99,6 +99,35 @@ export function SchedulingTab({ clients, role, initialDay }: SchedulingTabProps)
     return error;
   };
 
+  /**
+   * Bloqueio de um horário só, direto do calendário.
+   *
+   * Vira um bloqueio manual comum (mesma tabela do painel de Bloqueios),
+   * com a duração de um slot. O motivo fica escrito para o Eduardo saber
+   * depois que aquilo veio de um clique na semana, e não de uma regra.
+   */
+  const handleBlockSlot = async (day: DayKey, time: string) => {
+    const [h, m] = time.split(':').map(Number);
+    const end = new Date(Date.UTC(2000, 0, 1, h, m + data.settings.slotDurationMinutes));
+    const timeTo = `${String(end.getUTCHours()).padStart(2, '0')}:${String(end.getUTCMinutes()).padStart(2, '0')}`;
+
+    const error = await addBlock({
+      dateFrom: day,
+      dateTo: null,
+      timeFrom: time,
+      timeTo,
+      reason: 'bloqueado pela agenda'
+    });
+    if (error) window.alert(`Não consegui bloquear: ${error}`);
+    else await reload();
+  };
+
+  const handleUnblockSlot = async (id: number) => {
+    const error = await removeBlock(id);
+    if (error) window.alert(`Não consegui liberar: ${error}`);
+    else await reload();
+  };
+
   const handleImport = async () => {
     const result = await importEagendaBlocks();
     if (!result.error) await reload();
@@ -158,6 +187,8 @@ export function SchedulingTab({ clients, role, initialDay }: SchedulingTabProps)
           clientsById={clientsById}
           onNavigate={setAnchorDay}
           onSelectAppointment={setSelected}
+          onBlockSlot={handleBlockSlot}
+          onUnblockSlot={handleUnblockSlot}
         />
       )}
 
