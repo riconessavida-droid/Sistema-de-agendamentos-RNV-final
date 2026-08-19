@@ -59,6 +59,21 @@ const CHASE_AFTER_DAYS = 2;
  */
 const MAX_NEW_CLIENTS_PER_RUN = 3;
 
+/**
+ * LINHA DE CORTE: só contrato assinado a partir daqui é processado.
+ *
+ * Decidida pelo Eduardo em 19/08/2026, depois de descobrirmos que a conta
+ * tem mais de um cofre e que varrer todos traria centenas de contratos
+ * antigos junto. A regra dele desde o desenho sempre foi "sem backfill, só
+ * daqui pra frente" — esta data é essa regra escrita em um lugar só.
+ *
+ * Assinado antes: fica registrado como histórico, sem criar cliente, sem
+ * baixar PDF e sem avisar ninguém. Assinado depois: processa normal.
+ *
+ * Pode ser sobrescrita pelo segredo D4SIGN_SINCE (formato AAAA-MM-DD).
+ */
+const DEFAULT_PROCESS_SINCE = "2026-08-17";
+
 const INACTIVE_STATUSES = new Set(["CLOSED_CONTRACT", "CANCELLED_EARLY"]);
 const DEFAULT_OWNER_EMAILS = ["riconessavida@gmail.com", "eduardo@riconessavida.com.br"];
 
@@ -391,6 +406,9 @@ Deno.serve(async (req) => {
     // cobrança precisam concordar sobre o instante de referência.
     const now = new Date();
 
+    const sinceRaw = cleanUrl(Deno.env.get("D4SIGN_SINCE")) || DEFAULT_PROCESS_SINCE;
+    const processSince = new Date(sinceRaw + "T00:00:00-03:00");
+
     // O que o sistema já sabe sobre esses documentos.
     const { data: knownRows } = await supabase
       .from("d4sign_documents")
@@ -599,6 +617,36 @@ Deno.serve(async (req) => {
         parseD4SignDate(pickLoose(signer?.sign_info ?? {}, ["date", "signedAt"])) ??
         doc.sentAt ?? now;
       const signedAt = signedAtDate.toISOString();
+      // ------------------------------------------- linha de corte por data
+      // Antes de qualquer coisa: se o contrato é anterior ao corte, ele é
+      // histórico. Registra e sai — sem baixar PDF (economiza a segunda
+      // requisição), sem criar cliente, sem notificar.
+      if (signedAtDate < processSince) {
+        if (!dryRun) {
+          await supabase.from("d4sign_documents").upsert({
+            doc_uuid: doc.uuid,
+            document_name: doc.name,
+            uuid_safe: doc.safeUuid ?? safeUuid,
+            status_id: doc.statusId,
+            status_name: doc.statusName,
+            signer_name: signerName || null,
+            signer_email: signerEmail || null,
+            signed_at: signedAt,
+            sent_at: signedAt,
+            status: "IGNORED",
+            issue: "assinado antes da linha de corte (" + processSince.toISOString().slice(0, 10) + ")",
+            last_seen_at: now.toISOString(),
+            raw: doc.raw,
+          }, { onConflict: "doc_uuid" });
+        }
+        report.skipped.push({
+          uuid: doc.uuid,
+          name: signerName || doc.name,
+          reason: "assinado em " + signedAt.slice(0, 10) + ", antes do corte",
+        });
+        continue;
+      }
+
       const cpfValid = isValidCpf(signerCpfDigits);
       const issue = cpfValid ? null : "CPF inválido (" + (formatCpf(signerCpfDigits) || "não informado") + ")";
 
