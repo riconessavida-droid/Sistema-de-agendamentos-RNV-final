@@ -216,10 +216,20 @@ export function WeekCalendar({
       )}
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[900px] border-collapse">
+        <table className="w-full min-w-[1000px] border-collapse table-fixed">
+          <colgroup>
+            {/* Largura igual para os sete dias. A coluna do horário é
+                estreita e fixa; o resto divide o espaço em partes iguais,
+                para a semana ficar simétrica independente do tamanho dos
+                nomes. */}
+            <col className="w-[68px]" />
+            {days.map(day => (
+              <col key={day} className="w-[13.4%]" />
+            ))}
+          </colgroup>
           <thead>
             <tr>
-              <th className="w-16 bg-white border-b border-slate-200" />
+              <th className="bg-white border-b border-slate-200" />
               {days.map(day => {
                 const isToday = day === today;
                 return (
@@ -267,8 +277,11 @@ export function WeekCalendar({
             )}
 
             {allTimes.map(time => (
-              <tr key={time}>
-                <td className="w-16 px-2 py-1 text-right align-middle text-[11px] font-black text-slate-400 tabular-nums">
+              /* Altura fixa: a linha das 14:00 tem o mesmo tamanho da das
+                 09:30, com ou sem nome dentro. É o que permite ler a
+                 semana na horizontal sem recontar. */
+              <tr key={time} className="h-[52px]">
+                <td className="px-2 py-1 text-right align-middle text-[11px] font-black text-slate-400 tabular-nums">
                   {time}
                 </td>
 
@@ -303,7 +316,7 @@ export function WeekCalendar({
                       <button
                         onClick={() => handleClick(day, entry)}
                         disabled={!clickable}
-                        className={`w-full text-left px-2 py-1 rounded-md text-[11px] font-bold leading-tight transition-colors ${
+                        className={`w-full h-[44px] overflow-hidden text-left px-2 py-1 rounded-md text-[11px] font-bold leading-tight transition-colors ${
                           STATE_STYLE[entry.state]
                         } ${clickable ? '' : 'cursor-default'}`}
                         title={
@@ -322,9 +335,9 @@ export function WeekCalendar({
                           {pendingContract && <FileSignature className="w-3 h-3 shrink-0 text-yellow-200" />}
                           {entry.appointment?.meetUrl && <Video className="w-3 h-3 shrink-0 opacity-70" />}
                         </span>
-                        {name && <span className="block truncate">{name}</span>}
+                        {name && <span className="block truncate text-[10px]">{name}</span>}
                         {entry.state === 'blocked' && !name && (
-                          <span className="block truncate opacity-70">
+                          <span className="block truncate opacity-70 text-[10px]">
                             {entry.blockReason ?? 'bloqueado'}
                           </span>
                         )}
