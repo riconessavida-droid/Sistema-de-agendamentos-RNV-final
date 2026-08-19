@@ -289,11 +289,24 @@ Deno.serve(async (req) => {
     let safeUuid = cleanUrl(Deno.env.get("D4SIGN_SAFE_UUID")) || stored?.safe_uuid || null;
     let safeName = stored?.safe_name ?? null;
 
-    if (!safeUuid) {
+    /**
+     * TODOS os cofres, não só um.
+     *
+     * A primeira versão fixava um cofre ("Contrato e promissória
+     * consultoria") e ignorava o resto. Um contrato assinado em 18/08 ficou
+     * invisível por isso: estava em outro cofre da mesma conta, o sistema
+     * nunca soube que existia e o cliente ficou sem PDF na ficha.
+     *
+     * Agora a descoberta guarda a lista inteira e cada rodada varre todos.
+     * Custa 1 requisição por cofre — com o teto de 7 por rodada, cabe.
+     */
+    let safes = Array.isArray(stored?.safes) && stored.safes.length ? stored.safes : null;
+
+    if (!safes && !safeUuid) {
       // Descoberta custa 1 requisição — por isso o resultado fica guardado.
       const rawSafes = await apiCall("/safes");
-      const safes = asList(rawSafes);
-      if (safes.length === 0) {
+      const safes_ = asList(rawSafes);
+      if (safes_.length === 0) {
         // Mostra o retorno cru: é mais barato conferir o formato uma vez
         // do que adivinhar nome de campo a cada deploy.
         throw new Error(
@@ -306,23 +319,55 @@ Deno.serve(async (req) => {
 
       // Prefere um cofre com "contrato" no nome; senão, o primeiro.
       const preferred =
-        safes.find((s) => normalizeName(safeNameOf(s)).includes("contrato")) ?? safes[0];
+        safes_.find((s) => normalizeName(safeNameOf(s)).includes("contrato")) ?? safes_[0];
 
-      safeUuid = String(pickLoose(preferred, ["uuid-safe", "uuid", "uuidSafe", "safeUuid"]) ?? anyUuid(preferred) ?? "");
-      safeName = safeNameOf(preferred);
-      if (!safeUuid) {
+      safes = safes_.map((x) => ({
+        uuid: String(pickLoose(x, ["uuid-safe", "uuid", "uuidSafe", "safeUuid"]) ?? anyUuid(x) ?? ""),
+        name: safeNameOf(x),
+      })).filter((x) => x.uuid);
+
+      if (safes.length === 0) {
         throw new Error(
-          "não achei o uuid do cofre. Cofre recebido: " + JSON.stringify(preferred).slice(0, 500)
+          "não achei o uuid de nenhum cofre. Retorno: " + JSON.stringify(safes_).slice(0, 500)
         );
       }
+
+      safeUuid = preferred ? String(pickLoose(preferred, ["uuid-safe", "uuid", "uuidSafe", "safeUuid"]) ?? anyUuid(preferred) ?? "") : safes[0].uuid;
+      safeName = preferred ? safeNameOf(preferred) : safes[0].name;
       if (!dryRun) {
         await supabase.from("d4sign_sync_state")
-          .update({ safe_uuid: safeUuid, safe_name: safeName }).eq("id", 1);
+          .update({ safe_uuid: safeUuid, safe_name: safeName, safes }).eq("id", 1);
       }
     }
 
     // -------------------------------------------- os documentos do cofre
-    const rawDocuments = asList(await apiCall("/documents/" + encodeURIComponent(safeUuid) + "/safe"));
+    /**
+     * Varre TODOS os cofres, um por requisição.
+     *
+     * Ficar num cofre só escondeu um contrato finalizado por dias: ele
+     * estava em outro cofre da mesma conta e o sistema nunca soube que
+     * existia. Se o orçamento de requisições acabar no meio, os cofres que
+     * faltaram entram na próxima rodada — nada se perde, só atrasa.
+     */
+    const alvos = safes && safes.length
+      ? safes
+      : [{ uuid: safeUuid, name: safeName ?? "" }];
+
+    const rawDocuments = [];
+    const cofresLidos = [];
+    for (const cofre of alvos) {
+      try {
+        const doCofre = asList(await apiCall("/documents/" + encodeURIComponent(cofre.uuid) + "/safe"));
+        doCofre.forEach((d) => rawDocuments.push(d));
+        cofresLidos.push({ nome: cofre.name, documentos: doCofre.length });
+      } catch (e) {
+        if (e.budgetExhausted) {
+          report.skipped.push({ cofre: cofre.name, reason: "sem requisição sobrando nesta hora" });
+          break;
+        }
+        report.errors.push({ cofre: cofre.name, error: String(e.message ?? e) });
+      }
+    }
     state.documents_seen = rawDocuments.length;
 
     const documents = rawDocuments.map((d) => {
@@ -441,7 +486,7 @@ Deno.serve(async (req) => {
 
       return json({
         ok: true, mode: "inventário (primeira rodada)",
-        safe: safeName, documents: documents.length, inventoried: inventory.length,
+        safe: safeName, safes: cofresLidos, documents: documents.length, inventoried: inventory.length,
         note: "Histórico registrado sem processar. Da próxima rodada em diante, só o que mudar é tratado como novo.",
         requestsUsed
       });
@@ -833,7 +878,7 @@ Deno.serve(async (req) => {
 
     return json({
       ok: true, ...report,
-      safe: safeName, documents: documents.length, requestsUsed,
+      safe: safeName, safes: cofresLidos, documents: documents.length, requestsUsed,
       // Em modo seco vai junto o retorno cru do signatário: é com ele que
       // se conferem os nomes reais dos campos sem gastar outra rodada.
       ...(dryRun ? { sampleSigner } : {})
