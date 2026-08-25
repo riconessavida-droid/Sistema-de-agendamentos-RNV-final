@@ -300,6 +300,16 @@ Deno.serve(async (req) => {
   }
 
   try {
+    /**
+     * Um único "agora" para a rodada inteira, declarado ANTES de tudo.
+     *
+     * Já quebrou duas vezes em produção com "Cannot access 'now' before
+     * initialization", porque blocos novos foram inseridos acima da
+     * declaração. Aqui no topo, qualquer coisa que venha depois alcança —
+     * e inventário e régua de cobrança concordam sobre que horas são.
+     */
+    const now = new Date();
+
     // ------------------------------------------------------- o cofre
     const { data: stored } = await supabase
       .from("d4sign_sync_state").select("*").eq("id", 1).maybeSingle();
@@ -466,10 +476,6 @@ Deno.serve(async (req) => {
         raw: d
       };
     }).filter((d) => d.uuid);
-
-    // Um único "agora" para a rodada inteira: o inventário e a régua de
-    // cobrança precisam concordar sobre o instante de referência.
-    const now = new Date();
 
     const sinceRaw = cleanUrl(Deno.env.get("D4SIGN_SINCE")) || DEFAULT_PROCESS_SINCE;
     const processSince = new Date(sinceRaw + "T00:00:00-03:00");
