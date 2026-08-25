@@ -60,19 +60,22 @@ const CHASE_AFTER_DAYS = 2;
 const MAX_NEW_CLIENTS_PER_RUN = 3;
 
 /**
- * LINHA DE CORTE: só contrato assinado a partir daqui é processado.
+ * LINHA DE CORTE — segunda camada, não a principal.
  *
- * Decidida pelo Eduardo em 19/08/2026, depois de descobrirmos que a conta
- * tem mais de um cofre e que varrer todos traria centenas de contratos
- * antigos junto. A regra dele desde o desenho sempre foi "sem backfill, só
- * daqui pra frente" — esta data é essa regra escrita em um lugar só.
+ * ⚠️ Ela SOZINHA não segura nada, e isso já custou caro: em 22/08/2026 uns
+ * 60 clientes antigos viraram fichas novas apesar da trava estar em
+ * 17/08. O motivo é que o endpoint de signatários não devolve a data da
+ * assinatura em nenhum dos campos conhecidos, então `signedAtDate` caía no
+ * fallback "agora" e TODO contrato parecia recém-assinado. As datas
+ * gravadas denunciavam: todas no minuto 10, que é a hora do cron.
  *
- * Assinado antes: fica registrado como histórico, sem criar cliente, sem
- * baixar PDF e sem avisar ninguém. Assinado depois: processa normal.
+ * Quem segura de verdade é o inventário POR COFRE, mais abaixo, que não
+ * depende de data nenhuma. Esta data fica como reforço para o dia em que
+ * a leitura do carimbo for corrigida.
  *
- * Pode ser sobrescrita pelo segredo D4SIGN_SINCE (formato AAAA-MM-DD).
+ * Sobrescrevível pelo segredo D4SIGN_SINCE (AAAA-MM-DD).
  */
-const DEFAULT_PROCESS_SINCE = "2026-08-17";
+const DEFAULT_PROCESS_SINCE = "2026-08-25";
 
 const INACTIVE_STATUSES = new Set(["CLOSED_CONTRACT", "CANCELLED_EARLY"]);
 const DEFAULT_OWNER_EMAILS = ["riconessavida@gmail.com", "eduardo@riconessavida.com.br"];
@@ -366,7 +369,7 @@ Deno.serve(async (req) => {
      */
     const alvos = safes && safes.length
       ? safes
-      : [{ uuid: safeUuid, name: safeName ?? "" }];
+      : [{ uuid: safeUuid, name: safeName ?? "", inventoried: false }];
 
     const rawDocuments = [];
     const cofresLidos = [];
@@ -384,6 +387,68 @@ Deno.serve(async (req) => {
       }
     }
     state.documents_seen = rawDocuments.length;
+
+    /**
+     * COFRE NOVO ENTRA INTEIRO COMO HISTÓRICO.
+     *
+     * A linha de corte por data não segurou nada: o endpoint de
+     * signatários não devolve a data da assinatura nos campos conhecidos,
+     * então TODO contrato parecia "assinado agora" e ~60 clientes antigos
+     * viraram fichas novas, que o Eduardo teve de apagar um a um.
+     *
+     * O critério agora não depende de data nenhuma: na primeira vez que um
+     * cofre é visto, tudo que está nele é passado. Só documento que
+     * aparecer DEPOIS disso conta como novo. É a mesma ideia do inventário
+     * inicial, aplicada por cofre — porque foi exatamente um cofre novo
+     * aparecendo que causou o estrago.
+     */
+    const novos = alvos.filter((c) => !c.inventoried && cofresLidos.some((l) => l.nome === c.name));
+    if (novos.length > 0) {
+      const novosUuids = new Set(novos.map((c) => c.uuid));
+      const doNovo = rawDocuments.filter((d) => {
+        const u = String(pickLoose(d, ["uuidSafe", "uuid-safe"]) ?? "");
+        return novosUuids.has(u);
+      });
+
+      if (!dryRun && doNovo.length > 0) {
+        const linhas = doNovo.map((d) => {
+          const statusName = String(pickLoose(d, ["statusName", "status"]) ?? "");
+          const flat = normalizeName(statusName);
+          const fin = flat.includes("finaliz");
+          const can = flat.includes("cancel");
+          return {
+            doc_uuid: String(pickLoose(d, ["uuidDoc", "uuid"]) ?? anyUuid(d) ?? ""),
+            document_name: String(pickLoose(d, ["nameDoc", "name"]) ?? ""),
+            uuid_safe: String(pickLoose(d, ["uuidSafe", "uuid-safe"]) ?? ""),
+            status_name: statusName,
+            sent_at: now.toISOString(),
+            status: fin ? "IGNORED" : can ? "CANCELED" : "AWAITING",
+            issue: "cofre inventariado em " + now.toISOString().slice(0, 10) + " — anterior à integração",
+            chase_sent_at: fin || can ? null : now.toISOString(),
+            last_seen_at: now.toISOString(),
+            raw: d,
+          };
+        }).filter((l) => l.doc_uuid);
+
+        for (let i = 0; i < linhas.length; i += 100) {
+          await supabase.from("d4sign_documents")
+            .upsert(linhas.slice(i, i + 100), { onConflict: "doc_uuid" });
+        }
+
+        const marcados = alvos.map((c) => ({ ...c, inventoried: c.inventoried || novosUuids.has(c.uuid) }));
+        await supabase.from("d4sign_sync_state").update({ safes: marcados }).eq("id", 1);
+      }
+
+      return json({
+        ok: true,
+        mode: "inventário de cofre novo",
+        cofres: novos.map((c) => c.name),
+        documentos: doNovo.length,
+        note: "Passado registrado sem processar. Só o que entrar a partir de agora conta como novo.",
+        dryRun,
+        requestsUsed,
+      });
+    }
 
     const documents = rawDocuments.map((d) => {
       const statusName = String(pickLoose(d, ["statusName", "status"]) ?? "");
@@ -605,6 +670,8 @@ Deno.serve(async (req) => {
         report.errors.push({ uuid: doc.uuid, error: "documento finalizado sem signatário" });
         continue;
       }
+      // Guardado para descobrir em que campo vem a data da assinatura —
+      // hoje ela não é lida e o carimbo acaba sendo a hora do cron.
       if (!sampleSigner) sampleSigner = signer;
 
       // Nomes confirmados no retorno real: user_name, user_document, email.
@@ -921,7 +988,7 @@ Deno.serve(async (req) => {
       safe_name: safeName,
       documents_seen: state.documents_seen,
       sample_document: documents[0]?.raw ?? null,
-      sample_signer: sampleSigner
+      sample_signer: sampleSigner ?? stored?.sample_signer ?? null
     });
 
     return json({
