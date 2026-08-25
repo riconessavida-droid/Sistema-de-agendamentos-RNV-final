@@ -55,7 +55,9 @@ where d.doc_uuid = 'e2f921f8-0e81-4b91-b44a-032651f0d70e'
 -- Religa o documento à ficha nova, para o sistema não tentar criar de novo.
 update public.d4sign_documents d
    set matched_client_id = c.id::text,
-       match_method = 'recriado manualmente'
+       -- 'created' e não um texto livre: a coluna tem CHECK e só aceita
+       -- link | cpf | email | name | created.
+       match_method = 'created'
   from public.clients c
  where d.doc_uuid = 'e2f921f8-0e81-4b91-b44a-032651f0d70e'
    and regexp_replace(coalesce(c.cpf,''),'\D','','g') = d.signer_cpf;
