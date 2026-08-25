@@ -12,7 +12,11 @@
     <!-- Instalável na tela de início. No iPhone é isto que transforma o
          sistema num ícone que abre em tela cheia e, principalmente, que
          permite receber notificação push sem App Store nem TestFlight. -->
-    <link rel="manifest" href="/manifest.webmanifest">
+    <!-- ".json" e não ".webmanifest" de propósito: o rewrite da SPA no
+         vercel.json só deixa passar extensões de 2 a 5 letras, e
+         "webmanifest" tem 11 — o arquivo virava index.html e o iPhone
+         lia como manifesto inválido. -->
+    <link rel="manifest" href="/manifest.json">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="RNV">
