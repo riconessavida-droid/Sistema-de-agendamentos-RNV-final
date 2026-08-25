@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { Client, MeetingStatus, User, UserRole, BillingConfig, ClientBilling, BillingPeriod, EagendaBooking, ReminderLogEntry, ReminderCheck, ReminderType } from './types';
 import { PushSetup } from './PushSetup';
+import { MobileTabBar, TabId } from './MobileTabBar';
 import {
   STATUS_OPTIONS, GROUP_COLORS, getNextMonths, getMonthLabel, MEETING_LABEL_TEXTS
 } from './constants';
@@ -1252,8 +1253,9 @@ const billingData = useMemo(() => {
         </div>
       </nav>
 
-      {/* TABS */}
-      <div className="bg-white border-b">
+      {/* TABS — no computador. No celular quem navega é a barra do rodapé:
+          estas abas passavam da largura da tela e o polegar não alcançava. */}
+      <div className="bg-white border-b hidden lg:block">
         <div className="max-w-[1600px] mx-auto px-4 flex gap-8">
           <button onClick={() => setActiveTab('overview')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'overview' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Visão Geral</button>
           <button onClick={() => setActiveTab('checklist')} className={`py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'checklist' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-slate-400'}`}>Checklist Mensal</button>
@@ -1287,7 +1289,7 @@ const billingData = useMemo(() => {
       </div>
 
       {/* MAIN */}
-      <main className="flex-1 max-w-[1600px] mx-auto px-4 py-8 space-y-6 w-full">
+      <main className="flex-1 max-w-[1600px] mx-auto px-4 py-8 space-y-6 w-full pb-28 lg:pb-8">
 
         {/* ===== ABA: VISÃO GERAL ===== */}
         {activeTab === 'overview' && (
@@ -3129,6 +3131,15 @@ const billingData = useMemo(() => {
           </div>
         )}
       </main>
+
+      {/* Navegação de rodapé — só no celular. */}
+      <MobileTabBar
+        activeTab={activeTab}
+        onChange={(tab: TabId) => setActiveTab(tab)}
+        isAdmin={currentUser.role === UserRole.ADMIN}
+        pendingConciliation={conciliationStats.pending}
+        duplicates={duplicateGroups.total}
+      />
 
       {/* MODAL */}
       {isFormOpen && (
