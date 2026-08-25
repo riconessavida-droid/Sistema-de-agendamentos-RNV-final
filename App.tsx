@@ -8,6 +8,7 @@ import {
   CalendarClock, Link2, RefreshCw, DownloadCloud
 } from 'lucide-react';
 import { Client, MeetingStatus, User, UserRole, BillingConfig, ClientBilling, BillingPeriod, EagendaBooking, ReminderLogEntry, ReminderCheck, ReminderType } from './types';
+import { PushSetup } from './PushSetup';
 import {
   STATUS_OPTIONS, GROUP_COLORS, getNextMonths, getMonthLabel, MEETING_LABEL_TEXTS
 } from './constants';
@@ -1291,6 +1292,11 @@ const billingData = useMemo(() => {
         {/* ===== ABA: VISÃO GERAL ===== */}
         {activeTab === 'overview' && (
           <>
+            {/* Autorizar notificação neste aparelho. Só aparece quando faz
+                sentido: some sozinho no desktop já autorizado e vira
+                instrução de instalação no iPhone fora da tela de início. */}
+            <PushSetup userEmail={currentUser?.email} />
+
             {/* STATS */}
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
               <div className="bg-white p-5 rounded-2xl border flex items-center gap-4 shadow-sm">

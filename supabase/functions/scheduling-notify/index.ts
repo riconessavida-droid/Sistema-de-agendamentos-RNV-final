@@ -270,6 +270,25 @@ Deno.serve(async (req: Request) => {
   if (summarySent) {
     summary = { skipped: "já enviado" };
   } else if (!dryRun && adminEmail) {
+    // Além do e-mail, a notificação no celular — que chega mesmo com o
+    // aparelho bloqueado e não depende de ele abrir a caixa de entrada.
+    try {
+      const lista = meetingRows.map(m => `${m.time} ${m.name}`).join(" · ");
+      await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/send-push`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`
+        },
+        body: JSON.stringify({
+          title: `Amanhã: ${meetings.length} ${meetings.length === 1 ? "reunião" : "reuniões"}`,
+          body: lista,
+          url: siteUrl ? `/dia/${tomorrow}` : "/",
+          tag: `resumo-${tomorrow}`
+        })
+      });
+    } catch { /* push é extra; o resumo por e-mail continua valendo */ }
+
     const sent = await sendEmail("resumo", adminEmail, summaryPayload);
     await supabase.from("scheduling_notifications").insert({
       kind: "daily_digest",

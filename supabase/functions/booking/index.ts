@@ -297,6 +297,23 @@ const toWhatsApp = (digits: string | null): string | null => {
 };
 
 /**
+ * Avisa o Eduardo no celular. Falhar aqui nunca derruba o que veio antes:
+ * é notificação, não parte do agendamento.
+ */
+async function pushAviso(title: string, body: string, url = "/"): Promise<void> {
+  try {
+    await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/send-push`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`
+      },
+      body: JSON.stringify({ title, body, url })
+    });
+  } catch { /* sem push não é motivo para nada falhar */ }
+}
+
+/**
  * Confirmação por e-mail, logo depois de agendar.
  *
  * Era WhatsApp até 17/08/2026. Trocado porque a cadeia do WhatsApp tem
@@ -798,6 +815,13 @@ Deno.serve(async (req: Request) => {
       manageToken,
       meetUrl: meet.meetUrl ?? null
     });
+
+    // O aviso que o Eduardo pediu: saber na hora que alguém marcou.
+    await pushAviso(
+      "Novo agendamento",
+      `${name || "Um cliente"} marcou para ${meetingLabel(startsAt)}.`,
+      "/"
+    );
 
     return json({
       ok: true,

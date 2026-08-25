@@ -6,6 +6,19 @@ import { BookingPage } from './scheduling/BookingPage';
 import { ManageBookingPage } from './scheduling/ManageBookingPage';
 import { GoogleCallbackPage } from './scheduling/GooglePanel';
 
+/**
+ * Registra o service worker — a peça que recebe notificação quando o
+ * sistema está fechado. Falhar aqui não pode derrubar o app: sem ele o
+ * sistema funciona igual, só não avisa nada no celular.
+ */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      /* navegador sem suporte ou modo privado: segue sem push */
+    });
+  });
+}
+
 const rootElement = document.getElementById('root');
 if (!rootElement) {
   throw new Error("Could not find root element to mount to");

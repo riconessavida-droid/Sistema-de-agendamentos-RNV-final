@@ -909,6 +909,24 @@ Deno.serve(async (req) => {
         ? "Pode iniciar a consultoria."
         : "Atenção: o CPF informado é inválido (" + formatCpf(signerCpfDigits) + "). Peça para ele refazer.";
 
+      // Notificação no celular, além do WhatsApp. É o canal que não
+      // depende de terceiro nenhum — e o único que sobrou de pé nas
+      // quedas de agosto.
+      try {
+        await fetch(Deno.env.get("SUPABASE_URL") + "/functions/v1/send-push", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer " + Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"),
+          },
+          body: JSON.stringify({
+            title: cpfValid ? "Contrato assinado" : "Contrato com problema",
+            body: signerName + " — " + statusLine,
+            tag: "contrato-" + doc.uuid,
+          }),
+        });
+      } catch { /* push é extra, não derruba a baixa do contrato */ }
+
       const sent = await notify(notifyUrl, {
         event: cpfValid ? "contract_signed_ok" : "contract_signed_invalid",
         client_id: clientId,
