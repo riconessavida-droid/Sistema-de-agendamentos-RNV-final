@@ -10,6 +10,7 @@ import {
 import { Client, MeetingStatus, User, UserRole, BillingConfig, ClientBilling, BillingPeriod, EagendaBooking, ReminderLogEntry, ReminderCheck, ReminderType } from './types';
 import { PushSetup } from './PushSetup';
 import { MobileTabBar, TabId } from './MobileTabBar';
+import { ClientCardMobile } from './ClientCardMobile';
 import {
   STATUS_OPTIONS, GROUP_COLORS, getNextMonths, getMonthLabel, MEETING_LABEL_TEXTS
 } from './constants';
@@ -1363,7 +1364,47 @@ const billingData = useMemo(() => {
             </div>
 
             {/* TABELA */}
-            <div className="bg-white border rounded-2xl shadow-xl overflow-hidden">
+            {/* ---------------------------------------- CELULAR: cartões
+                A planilha abaixo tem coluna fixa de 320px e colunas de mês
+                de 240px — num iPhone de 390px a primeira come a tela toda.
+                Aqui a mesma informação vira um cartão por cliente, com os
+                meses empilhados e nenhum controle a menos. */}
+            <div className="lg:hidden space-y-3">
+              {filteredClients.map(client => {
+                const totalMeetings = 5 + (client.extraMeetings ?? 0);
+                return (
+                  <ClientCardMobile
+                    key={client.id}
+                    client={client}
+                    cycle={getNextMonths(client.startMonthYear, totalMeetings)}
+                    inactive={isClientInactive(client)}
+                    orange={isOrangeClient(client)}
+                    statusOptions={STATUS_OPTIONS}
+                    meetingLabels={MEETING_LABEL_TEXTS}
+                    getMonthLabel={getMonthLabel}
+                    onEdit={handleEditClick}
+                    onDelete={deleteClient}
+                    onToggleContract={c => updateClient(c.id, { contractSigned: !c.contractSigned })}
+                    onExtraMeetings={updateExtraMeetings}
+                    onMeetingChange={updateMeetingData}
+                  />
+                );
+              })}
+              {filteredClients.length === 0 && (
+                <div className="bg-white rounded-2xl border py-16 text-center text-slate-400 font-bold text-sm">
+                  Nenhum cliente encontrado.
+                </div>
+              )}
+              <button
+                onClick={addMoreMonth}
+                className="w-full py-3 rounded-xl bg-yellow-50 text-yellow-700 text-[11px] font-black uppercase tracking-widest"
+              >
+                Ver mais meses
+              </button>
+            </div>
+
+            {/* ------------------------------------- COMPUTADOR: planilha */}
+            <div className="bg-white border rounded-2xl shadow-xl overflow-hidden hidden lg:block">
               <div className="p-4 border-b bg-slate-50 flex items-center justify-between">
                 <h2 className="font-bold text-slate-800 uppercase text-xs tracking-widest">Planilha Operacional RNV</h2>
                 <button onClick={addMoreMonth} className="text-[10px] font-black text-yellow-600 uppercase bg-yellow-50 px-3 py-1.5 rounded-lg hover:bg-yellow-100 transition-colors">Ver Mais Meses</button>
