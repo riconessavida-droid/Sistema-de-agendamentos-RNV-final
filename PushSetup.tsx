@@ -154,24 +154,26 @@ export function PushSetup({ userEmail }: { userEmail?: string }) {
     );
   }
 
+  /**
+   * Já ativo vira uma tarja fina.
+   *
+   * O cartão explicativo faz sentido uma vez, para quem ainda não ativou.
+   * Depois disso ele só ocupa o topo da tela todo dia, repetindo algo que
+   * a pessoa já sabe — no celular chegava a empurrar a lista de clientes
+   * para fora da primeira tela.
+   */
   if (estado === 'ligado') {
     return (
-      <div className={`${base} bg-emerald-50 border-emerald-200 text-emerald-800`}>
-        <Bell className="w-5 h-5 shrink-0 mt-0.5" />
-        <div className="flex-1">
-          <p className="font-black">Notificações ativas neste aparelho</p>
-          <p className="mt-1 leading-relaxed">
-            Você recebe aviso quando um cliente agenda, quando alguém assina o
-            contrato e o resumo do dia seguinte às 21h.
-          </p>
-          <button
-            onClick={desativar}
-            disabled={salvando}
-            className="mt-2 text-xs font-bold underline underline-offset-2 opacity-70 hover:opacity-100"
-          >
-            {salvando ? 'Desativando...' : 'Desativar neste aparelho'}
-          </button>
-        </div>
+      <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800">
+        <Bell className="w-3.5 h-3.5 shrink-0" />
+        <span className="text-[11px] font-bold flex-1">Notificações ativas</span>
+        <button
+          onClick={desativar}
+          disabled={salvando}
+          className="text-[11px] font-bold underline underline-offset-2 opacity-60 hover:opacity-100"
+        >
+          {salvando ? '...' : 'desativar'}
+        </button>
       </div>
     );
   }

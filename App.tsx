@@ -1222,13 +1222,13 @@ const billingData = useMemo(() => {
       {/* NAVBAR */}
       <nav className="bg-white border-b sticky top-0 z-50 shadow-sm">
         <div className="max-w-[1600px] mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="bg-yellow-500 p-2 rounded-lg">
-              <TrendingUp className="text-white w-6 h-6" />
+          <div className="flex items-center gap-2 lg:gap-3 min-w-0">
+            <div className="bg-yellow-500 p-1.5 lg:p-2 rounded-lg flex-shrink-0">
+              <TrendingUp className="text-white w-5 h-5 lg:w-6 lg:h-6" />
             </div>
-            <h1 className="text-xl font-bold text-slate-800">RNV Consultoria</h1>
+            <h1 className="text-base lg:text-xl font-bold text-slate-800 truncate">RNV Consultoria</h1>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 lg:gap-4 flex-shrink-0">
             <div className="relative hidden md:block">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input
@@ -1241,11 +1241,15 @@ const billingData = useMemo(() => {
             <button onClick={exportClientsToCSV} className="p-2 bg-slate-100 rounded-lg hover:bg-slate-200" title="Exportar CSV">
               <Download className="w-5 h-5 text-slate-600" />
             </button>
+            {/* No celular o rotulo sai e sobra so o "+": o cabecalho tem
+                pouco mais de 390px e o botao inteiro comia metade dele. */}
             <button
               onClick={() => { setEditingClient(null); setIsFormOpen(true); }}
-              className="bg-yellow-500 text-white px-4 py-2 rounded-lg font-bold hover:bg-yellow-600 flex items-center gap-2"
+              className="bg-yellow-500 text-white p-2 lg:px-4 lg:py-2 rounded-lg font-bold hover:bg-yellow-600 flex items-center gap-2"
+              title="Novo cliente"
             >
-              <Plus className="w-5 h-5" /> Novo Cliente
+              <Plus className="w-5 h-5" />
+              <span className="hidden lg:inline">Novo Cliente</span>
             </button>
             <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-600">
               <LogOut className="w-5 h-5" />
@@ -1300,23 +1304,39 @@ const billingData = useMemo(() => {
                 instrução de instalação no iPhone fora da tela de início. */}
             <PushSetup userEmail={currentUser?.email} />
 
+            {/* Busca no celular. No computador ela vive no cabecalho, que
+                no celular nao tem largura para ela — e sem busca a unica
+                saida era rolar a lista inteira. */}
+            <div className="relative lg:hidden">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                placeholder="Pesquisar cliente..."
+                className="w-full pl-9 pr-4 py-3 bg-white rounded-xl text-sm outline-none border focus:border-yellow-500"
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+              />
+            </div>
+
             {/* STATS */}
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-              <div className="bg-white p-5 rounded-2xl border flex items-center gap-4 shadow-sm">
-                <div className="bg-green-50 p-3 rounded-xl text-green-600"><Users /></div>
-                <div><p className="text-[10px] font-black text-slate-400 uppercase">Ativos</p><p className="text-2xl font-black text-slate-800">{stats.totalAtivos}</p></div>
+            {/* Dois por linha no celular, quatro no computador. Empilhados
+                um por linha, estes quadros tomavam quase uma tela inteira
+                antes de chegar na lista de clientes. */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 lg:gap-4">
+              <div className="bg-white p-3 lg:p-5 rounded-xl lg:rounded-2xl border flex items-center gap-2 lg:gap-4 shadow-sm">
+                <div className="bg-green-50 p-2 lg:p-3 rounded-lg lg:rounded-xl text-green-600"><Users /></div>
+                <div><p className="text-[9px] lg:text-[10px] font-black text-slate-400 uppercase truncate">Ativos</p><p className="text-lg lg:text-2xl font-black text-slate-800 leading-tight">{stats.totalAtivos}</p></div>
               </div>
-              <div className="bg-white p-5 rounded-2xl border flex items-center gap-4 shadow-sm">
-                <div className="bg-orange-50 p-3 rounded-xl text-orange-600"><AlertCircle /></div>
-                <div><p className="text-[10px] font-black text-slate-400 uppercase">Atenção</p><p className="text-2xl font-black text-slate-800">{stats.totalAtencao}</p></div>
+              <div className="bg-white p-3 lg:p-5 rounded-xl lg:rounded-2xl border flex items-center gap-2 lg:gap-4 shadow-sm">
+                <div className="bg-orange-50 p-2 lg:p-3 rounded-lg lg:rounded-xl text-orange-600"><AlertCircle /></div>
+                <div><p className="text-[9px] lg:text-[10px] font-black text-slate-400 uppercase truncate">Atenção</p><p className="text-lg lg:text-2xl font-black text-slate-800 leading-tight">{stats.totalAtencao}</p></div>
               </div>
-              <div className="bg-white p-5 rounded-2xl border flex items-center gap-4 shadow-sm">
-                <div className="bg-blue-50 p-3 rounded-xl text-blue-600"><UserPlus /></div>
-                <div><p className="text-[10px] font-black text-slate-400 uppercase">{stats.labelEntradas}</p><p className="text-2xl font-black text-slate-800">{stats.entradas}</p></div>
+              <div className="bg-white p-3 lg:p-5 rounded-xl lg:rounded-2xl border flex items-center gap-2 lg:gap-4 shadow-sm">
+                <div className="bg-blue-50 p-2 lg:p-3 rounded-lg lg:rounded-xl text-blue-600"><UserPlus /></div>
+                <div><p className="text-[9px] lg:text-[10px] font-black text-slate-400 uppercase truncate">{stats.labelEntradas}</p><p className="text-lg lg:text-2xl font-black text-slate-800 leading-tight">{stats.entradas}</p></div>
               </div>
-              <div className="bg-white p-5 rounded-2xl border flex items-center gap-4 shadow-sm cursor-pointer hover:border-slate-400 transition-all" onClick={() => setStatusFilter('finalized')} title="Clique para ver clientes finalizados">
-                <div className="bg-slate-50 p-3 rounded-xl text-slate-600"><CheckSquare /></div>
-                <div><p className="text-[10px] font-black text-slate-400 uppercase">Finalizados</p><p className="text-2xl font-black text-slate-800">{stats.totalFinalizados}</p></div>
+              <div className="bg-white p-3 lg:p-5 rounded-xl lg:rounded-2xl border flex items-center gap-2 lg:gap-4 shadow-sm cursor-pointer hover:border-slate-400 transition-all" onClick={() => setStatusFilter('finalized')} title="Clique para ver clientes finalizados">
+                <div className="bg-slate-50 p-2 lg:p-3 rounded-lg lg:rounded-xl text-slate-600"><CheckSquare /></div>
+                <div><p className="text-[9px] lg:text-[10px] font-black text-slate-400 uppercase truncate">Finalizados</p><p className="text-lg lg:text-2xl font-black text-slate-800 leading-tight">{stats.totalFinalizados}</p></div>
               </div>
             </div>
 
