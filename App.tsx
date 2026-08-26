@@ -253,7 +253,39 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
     setLoadingBoard(false);
   };
 
-  useEffect(() => { loadBoard(); }, [currentUser]);
+  /**
+   * Agendamentos do NOSSO sistema, para a Conciliação enxergar os dois
+   * mundos.
+   *
+   * A tela nasceu quando tudo vinha do eAgenda e por isso só olhava para
+   * lá. Depois da migração, cliente que agenda pelo link novo ficava
+   * invisível ali: aparecia como "sem agendamento" mesmo tendo reunião
+   * marcada, e nenhum "Atualizar" resolvia — estava procurando no lugar
+   * errado.
+   */
+  const [ownAppointments, setOwnAppointments] = useState<Array<{
+    id: string; clientId: string | null; attendeeName: string | null; startsAt: string;
+  }>>([]);
+
+  const loadOwnAppointments = async () => {
+    if (!currentUser) return;
+    const { data, error } = await supabase
+      .from('appointments')
+      .select('id, client_id, attendee_name, starts_at')
+      .eq('status', 'CONFIRMED')
+      .gte('starts_at', new Date().toISOString())
+      .order('starts_at');
+    if (!error && data) {
+      setOwnAppointments(data.map((r: any) => ({
+        id: r.id,
+        clientId: r.client_id ?? null,
+        attendeeName: r.attendee_name ?? null,
+        startsAt: r.starts_at
+      })));
+    }
+  };
+
+  useEffect(() => { loadBoard(); loadOwnAppointments(); }, [currentUser]);
 
   /**
    * Tarefas do Dia: o disparo real e a conferência.
@@ -353,7 +385,7 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
 
   useEffect(() => {
     if (activeTab !== 'conciliation' || !currentUser) return;
-    const id = setInterval(loadBoard, 30000);
+    const id = setInterval(() => { loadBoard(); loadOwnAppointments(); }, 30000);
     return () => clearInterval(id);
   }, [activeTab, currentUser]);
 
@@ -818,12 +850,32 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
   // Cruza os clientes ativos com os agendamentos conciliados do eAgenda.
   // Cada ativo vira uma linha: com a data (conciliado) ou "sem agendamento".
   const conciliationRows = useMemo(() => {
-    const byClient = new Map<string, EagendaBooking>();
+    /**
+     * A PRÓXIMA reunião de cada cliente, venha de onde vier.
+     *
+     * Antes olhava só o eAgenda e pegava a data MAIOR — que podia ser uma
+     * reunião do passado. Agora junta as duas fontes e fica com a primeira
+     * FUTURA, que é a única que interessa a quem está conferindo se o
+     * cliente já agendou.
+     */
+    const agora = new Date().toISOString();
+    const byClient = new Map<string, { quando: string; origem: 'sistema' | 'eagenda'; booking: EagendaBooking | null }>();
+
     boardBookings.forEach(b => {
       if (!b.matchedClientId) return;
+      if (b.startDateTime < agora) return;
       const cur = byClient.get(b.matchedClientId);
-      // fica com o agendamento mais recente por cliente
-      if (!cur || b.startDateTime > cur.startDateTime) byClient.set(b.matchedClientId, b);
+      if (!cur || b.startDateTime < cur.quando) {
+        byClient.set(b.matchedClientId, { quando: b.startDateTime, origem: 'eagenda', booking: b });
+      }
+    });
+
+    ownAppointments.forEach(a => {
+      if (!a.clientId) return;
+      const cur = byClient.get(a.clientId);
+      if (!cur || a.startsAt < cur.quando) {
+        byClient.set(a.clientId, { quando: a.startsAt, origem: 'sistema', booking: null });
+      }
     });
     const term = normalizeName(conciliationSearch);
     const digits = conciliationSearch.replace(/\D/g, '');
@@ -831,19 +883,27 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
       .filter(c => !term
         || normalizeName(c.name).includes(term)
         || (digits.length > 0 && (c.phoneDigits ?? '').replace(/\D/g, '').includes(digits)))
-      .map(c => ({ client: c, booking: byClient.get(c.id) ?? null }))
+      .map(c => {
+        const proxima = byClient.get(c.id) ?? null;
+        return {
+          client: c,
+          booking: proxima?.booking ?? null,
+          agendado: proxima ? proxima.quando : null,
+          origem: proxima ? proxima.origem : null
+        };
+      })
       .filter(row => {
-        if (conciliationFilter === 'done') return !!row.booking;
-        if (conciliationFilter === 'pending') return !row.booking;
+        if (conciliationFilter === 'done') return !!row.agendado;
+        if (conciliationFilter === 'pending') return !row.agendado;
         return true;
       })
       .sort((a, b) => {
         // sem agendamento primeiro, depois por nome
-        const ap = a.booking ? 1 : 0, bp = b.booking ? 1 : 0;
+        const ap = a.agendado ? 1 : 0, bp = b.agendado ? 1 : 0;
         if (ap !== bp) return ap - bp;
         return a.client.name.localeCompare(b.client.name);
       });
-  }, [activeClients, boardBookings, conciliationSearch, conciliationFilter]);
+  }, [activeClients, boardBookings, ownAppointments, conciliationSearch, conciliationFilter]);
 
   const conciliationStats = useMemo(() => {
     // conta só clientes ATIVOS conciliados (evita passar de 'total' e dar negativo)
@@ -883,10 +943,31 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
   // cliente ativo certo pode "recuperar" o agendamento preso na duplicata.
   const candidates = useMemo(() => {
     const activeIds = new Set(activeClients.map(c => c.id));
-    return boardBookings.filter(b =>
+    const agora = new Date().toISOString();
+
+    const soltos = boardBookings.filter(b =>
       (b.conciliationStatus === 'PENDING' && !b.matchedClientId) ||
       (!!b.matchedClientId && !activeIds.has(b.matchedClientId))
     );
+
+    /**
+     * Um por pessoa, e só o que ainda vai acontecer.
+     *
+     * A lista mostrava o histórico inteiro do eAgenda: a mesma pessoa
+     * aparecia três, quatro vezes com datas de meses atrás, e escolher
+     * virava adivinhação. Conciliar é dizer "este cliente é esta pessoa" —
+     * para isso basta uma ocorrência, e a que importa é a próxima.
+     */
+    const porPessoa = new Map<string, EagendaBooking>();
+    soltos
+      .filter(b => b.startDateTime >= agora)
+      .forEach(b => {
+        const chave = b.personKey || normalizeName(b.attendeeName ?? '') || b.appointmentKey;
+        const cur = porPessoa.get(chave);
+        if (!cur || b.startDateTime < cur.startDateTime) porPessoa.set(chave, b);
+      });
+
+    return Array.from(porPessoa.values());
   }, [boardBookings, activeClients]);
 
   // Ordena os candidatos por semelhança de nome com o cliente (melhor sugestão 1º).
@@ -3053,32 +3134,46 @@ const billingData = useMemo(() => {
                 <div className="text-center py-16 text-slate-400 text-sm">Nenhum cliente ativo encontrado.</div>
               ) : (
                 <div className="divide-y divide-slate-100">
-                  {conciliationRows.map(({ client, booking }) => {
+                  {conciliationRows.map(({ client, booking, agendado, origem }) => {
                     const isEditing = editingBooking === client.id;
                     const selectedId = conciliationSelections[client.id] ?? client.id;
                     const busy = booking ? processingBooking === booking.appointmentKey : false;
-                    const dateLabel = booking
-                      ? `${String(booking.dayOfMonth).padStart(2, '0')}/${booking.monthKey.split('-')[1]}/${booking.monthKey.split('-')[0]}`
+                    // A data vem do eAgenda ou do nosso sistema — o que
+                    // importa para quem confere é que ele já agendou.
+                    const dateLabel = agendado
+                      ? new Date(agendado).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+                      : null;
+                    const horaLabel = agendado
+                      ? new Date(agendado).toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' })
                       : null;
                     return (
                       <div key={client.id} className="grid grid-cols-2">
                         {/* Lado SISTEMA */}
-                        <div className={`px-4 py-3 border-r border-slate-100 ${booking ? 'bg-yellow-50/40' : 'bg-yellow-50'}`}>
+                        <div className={`px-4 py-3 border-r border-slate-100 ${agendado ? 'bg-yellow-50/40' : 'bg-yellow-50'}`}>
                           <p className="text-sm font-bold text-slate-800">{client.name}</p>
                           <p className="text-xs text-slate-400">{client.phoneDigits}</p>
                         </div>
 
                         {/* Lado eAGENDA */}
                         <div className="px-4 py-3">
-                          {booking ? (
+                          {agendado ? (
                             <div className="flex items-start justify-between gap-2">
                               <div className="min-w-0">
                                 <p className="text-sm font-bold text-green-600 flex items-center gap-1">
-                                  <CheckCircle2 className="w-4 h-4 shrink-0" /> {dateLabel}
+                                  <CheckCircle2 className="w-4 h-4 shrink-0" /> {dateLabel} · {horaLabel}
                                 </p>
-                                <p className="text-xs text-slate-400 truncate">{booking.attendeeName}</p>
+                                <p className="text-xs text-slate-400 truncate">
+                                  {origem === 'sistema' ? (
+                                    <span className="text-emerald-600 font-bold">agendou pelo nosso link</span>
+                                  ) : (
+                                    <>eAgenda · {booking?.attendeeName}</>
+                                  )}
+                                </p>
                               </div>
-                              {!isEditing && (
+                              {/* Só o que veio do eAgenda precisa de correção
+                                  manual: o do nosso sistema já nasce ligado
+                                  ao cliente certo, não há o que conciliar. */}
+                              {!isEditing && origem === 'eagenda' && (
                                 <button
                                   onClick={() => { setEditingBooking(client.id); setConciliationSelections(prev => ({ ...prev, [client.id]: client.id })); }}
                                   className="text-xs font-semibold text-slate-400 hover:text-yellow-600 flex items-center gap-1 shrink-0"
@@ -3105,27 +3200,55 @@ const billingData = useMemo(() => {
                             </div>
                           )}
 
-                          {manualClientId === client.id && !booking && (() => {
-                            const opts = candidatesFor(client);
+                          {manualClientId === client.id && !agendado && (() => {
+                            /**
+                             * Lista curta e buscável, no lugar do menu nativo.
+                             *
+                             * Antes vinha o histórico inteiro do eAgenda: a
+                             * mesma pessoa três, quatro vezes, com datas de
+                             * meses atrás e sem como digitar para achar. Agora
+                             * são só os agendamentos futuros ainda sem dono,
+                             * um por pessoa, e o campo filtra enquanto digita.
+                             */
+                            const termo = normalizeName(conciliationSelections[`busca-${client.id}`] ?? '');
+                            const todos = candidatesFor(client);
+                            const opts = termo
+                              ? todos.filter(c => normalizeName(c.attendeeName ?? '').includes(termo))
+                              : todos;
                             const chosenKey = conciliationSelections[client.id] ?? opts[0]?.appointmentKey ?? '';
                             const chosenBusy = processingBooking === chosenKey;
                             return (
                               <div className="mt-2">
-                                {opts.length === 0 ? (
-                                  <p className="text-xs text-slate-400">Nenhum agendamento na janela pra sugerir. Rode "Importar" ou amplie os dias.</p>
+                                {todos.length === 0 ? (
+                                  <p className="text-xs text-slate-400">Nenhum agendamento futuro sem dono para sugerir.</p>
                                 ) : (
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <select
-                                      value={chosenKey}
-                                      onChange={e => setConciliationSelections(prev => ({ ...prev, [client.id]: e.target.value }))}
-                                      className="flex-1 min-w-[200px] rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-yellow-400"
-                                    >
+                                  <div className="space-y-2">
+                                    <input
+                                      value={conciliationSelections[`busca-${client.id}`] ?? ''}
+                                      onChange={e => setConciliationSelections(prev => ({ ...prev, [`busca-${client.id}`]: e.target.value }))}
+                                      placeholder="Digite para filtrar…"
+                                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400"
+                                    />
+
+                                    <div className="max-h-48 overflow-y-auto rounded-lg border border-slate-200 divide-y divide-slate-100">
+                                      {opts.length === 0 && (
+                                        <p className="px-3 py-3 text-xs text-slate-400">Nenhum nome com esse texto.</p>
+                                      )}
                                       {opts.map((c, i) => (
-                                        <option key={c.appointmentKey} value={c.appointmentKey}>
-                                          {i === 0 ? '⭐ ' : ''}{c.attendeeName ?? 'Sem nome'} · {String(c.dayOfMonth).padStart(2, '0')}/{c.monthKey.split('-')[1]}
-                                        </option>
+                                        <button
+                                          key={c.appointmentKey}
+                                          onClick={() => setConciliationSelections(prev => ({ ...prev, [client.id]: c.appointmentKey }))}
+                                          className={`w-full text-left px-3 py-2 text-sm transition-colors ${
+                                            chosenKey === c.appointmentKey ? 'bg-yellow-50 text-yellow-800 font-bold' : 'hover:bg-slate-50 text-slate-600'
+                                          }`}
+                                        >
+                                          {i === 0 && !termo ? '⭐ ' : ''}{c.attendeeName ?? 'Sem nome'}
+                                          <span className="text-slate-400"> · {String(c.dayOfMonth).padStart(2, '0')}/{c.monthKey.split('-')[1]}</span>
+                                        </button>
                                       ))}
-                                    </select>
+                                    </div>
+
+                                    <div className="flex items-center gap-2 flex-wrap">
                                     <button
                                       disabled={chosenBusy || !chosenKey}
                                       onClick={() => manualConcile(client, chosenKey)}
@@ -3139,6 +3262,7 @@ const billingData = useMemo(() => {
                                     >
                                       Cancelar
                                     </button>
+                                    </div>
                                   </div>
                                 )}
                               </div>
