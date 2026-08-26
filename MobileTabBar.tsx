@@ -1,6 +1,6 @@
 import {
   LayoutGrid, CalendarCheck, CheckSquare, CalendarClock, History,
-  Link2, BarChart3, DollarSign, UserCog, Copy, ChevronRight
+  Link2, BarChart3, DollarSign, UserCog, Copy, ChevronRight, CircleUser
 } from 'lucide-react';
 
 /**
@@ -15,7 +15,8 @@ import {
 
 export type TabId =
   | 'overview' | 'checklist' | 'tasks' | 'scheduling' | 'history'
-  | 'conciliation' | 'reports' | 'billing' | 'users' | 'duplicates';
+  | 'conciliation' | 'reports' | 'billing' | 'users' | 'duplicates'
+  | 'profile';
 
 interface Aba {
   id: TabId;
@@ -37,7 +38,10 @@ const ABAS: Aba[] = [
   { id: 'reports',      label: 'Relatórios', Icon: BarChart3,  adminOnly: true },
   { id: 'billing',      label: 'Faturas',    Icon: DollarSign, adminOnly: true },
   { id: 'users',        label: 'Usuários',   Icon: UserCog,    adminOnly: true },
-  { id: 'duplicates',   label: 'Duplicados', Icon: Copy,       adminOnly: true }
+  { id: 'duplicates',   label: 'Duplicados', Icon: Copy,       adminOnly: true },
+  // Última de propósito: é onde ficam conta e notificações, coisas que se
+  // ajustam uma vez e não se procura todo dia.
+  { id: 'profile',      label: 'Perfil',     Icon: CircleUser }
 ];
 
 interface MobileTabBarProps {

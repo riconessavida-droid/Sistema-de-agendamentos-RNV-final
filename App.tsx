@@ -1224,6 +1224,29 @@ const billingData = useMemo(() => {
     return { totalAtivos, totalFinalizados, totalAtencao, entradas, labelEntradas: getMonthLabel(target) };
   }, [clients, filterMonth]);
 
+  /**
+   * Faturamento abre no mês corrente, não em janeiro.
+   *
+   * A lista começa no primeiro mês com cliente — janeiro/2026 — e no
+   * celular isso obrigava a avançar oito vezes antes de ver a expectativa
+   * do mês em curso, que é o número que interessa ao abrir a tela.
+   *
+   * Roda só uma vez, quando os meses aparecem: depois disso a posição é
+   * de quem está navegando, e reposicionar seria tirar o controle da mão.
+   */
+  const billingPositioned = useRef(false);
+  useEffect(() => {
+    if (billingPositioned.current) return;
+    const meses = billingData?.months ?? [];
+    if (meses.length === 0) return;
+
+    const hoje = new Date();
+    const atual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
+    const idx = meses.indexOf(atual);
+    setBillingMonthIndex(idx >= 0 ? idx : meses.length - 1);
+    billingPositioned.current = true;
+  }, [billingData]);
+
   if (!currentUser) return <Auth onLogin={handleLogin} />;
 
   return (
@@ -1309,24 +1332,6 @@ const billingData = useMemo(() => {
         {/* ===== ABA: VISÃO GERAL ===== */}
         {activeTab === 'overview' && (
           <>
-            {/* Autorizar notificação neste aparelho. Só aparece quando faz
-                sentido: some sozinho no desktop já autorizado e vira
-                instrução de instalação no iPhone fora da tela de início. */}
-            <PushSetup userEmail={currentUser?.email} />
-
-            {/* Busca no celular. No computador ela vive no cabecalho, que
-                no celular nao tem largura para ela — e sem busca a unica
-                saida era rolar a lista inteira. */}
-            <div className="relative lg:hidden">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-              <input
-                placeholder="Pesquisar cliente..."
-                className="w-full pl-9 pr-4 py-3 bg-white rounded-xl text-sm outline-none border focus:border-yellow-500"
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-              />
-            </div>
-
             {/* STATS */}
             {/* Dois por linha no celular, quatro no computador. Empilhados
                 um por linha, estes quadros tomavam quase uma tela inteira
@@ -1359,6 +1364,20 @@ const billingData = useMemo(() => {
                 <button onClick={() => setStatusFilter('finalized')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'finalized' ? 'bg-slate-800 text-white border-slate-900 shadow-md' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Finalizados</button>
                 <button onClick={() => setStatusFilter('unsigned')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'unsigned' ? 'bg-yellow-500 text-white border-yellow-600 shadow-md' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Contrato Pendente</button>
                 <button onClick={() => setStatusFilter('all')} className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase border transition-all ${statusFilter === 'all' ? 'bg-slate-200 text-slate-700 border-slate-300' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>Todos</button>
+
+                {/* Busca — no celular. No computador ela vive no cabeçalho,
+                    que aqui não tem largura. Fica DEPOIS dos filtros de
+                    propósito: primeiro se escolhe o grupo, depois se procura
+                    dentro dele. */}
+                <div className="relative w-full lg:hidden mt-2">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    placeholder="Pesquisar cliente..."
+                    className="w-full pl-9 pr-4 py-2.5 bg-slate-50 rounded-xl text-sm outline-none border focus:border-yellow-500 focus:bg-white"
+                    value={searchTerm}
+                    onChange={e => setSearchTerm(e.target.value)}
+                  />
+                </div>
 
                 {/* DROPDOWN MÊS */}
                 <div className="relative ml-auto">
@@ -2434,7 +2453,7 @@ const billingData = useMemo(() => {
             return (
               <div
                 key={month}
-                className={`flex flex-col gap-2 w-full lg:w-auto lg:min-w-[220px] rounded-xl transition-all ${escondidoNoCelular ? 'hidden lg:flex' : ''} ${dragOverMonth === month && draggingClientId ? 'ring-2 ring-yellow-400 bg-yellow-50/30' : ''}`}
+                className={`flex flex-col gap-1.5 lg:gap-2 w-full lg:w-auto lg:min-w-[220px] rounded-xl transition-all ${escondidoNoCelular ? 'hidden lg:flex' : ''} ${dragOverMonth === month && draggingClientId ? 'ring-2 ring-yellow-400 bg-yellow-50/30' : ''}`}
                 onDragOver={(e) => { e.preventDefault(); setDragOverMonth(month); }}
                 onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverMonth(null); }}
                 onDrop={async (e) => {
@@ -2502,7 +2521,7 @@ const billingData = useMemo(() => {
                         draggable={true}
                         onDragStart={() => setDraggingClientId(item.clientId)}
                         onDragEnd={() => { setDraggingClientId(null); setDragOverMonth(null); }}
-                        className={`rounded-lg px-3 py-2 border-2 transition-all ${
+                        className={`rounded-lg px-3 py-1.5 lg:py-2 border-2 transition-all ${
                           paymentStatus === 'PAID'
                             ? 'bg-green-50 border-green-300 shadow-sm'
                             : paymentStatus === 'DEFAULTED'
@@ -3156,6 +3175,49 @@ const billingData = useMemo(() => {
         )}
 
         {/* ===== ABA: DUPLICADOS ===== */}
+        {/* ===== ABA: PERFIL (celular) =====
+            Reúne o que se ajusta uma vez e não se procura todo dia: quem
+            está logado, as notificações do aparelho e a saída. A tarja de
+            "notificações ativas" vivia fixa no topo da Visão Geral,
+            repetindo todo dia algo que já estava resolvido. */}
+        {activeTab === 'profile' && (
+          <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 lg:hidden">
+            <div className="bg-white rounded-2xl border shadow-sm p-5">
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-2xl bg-yellow-500 flex items-center justify-center text-white font-black text-xl">
+                  {(currentUser.name || currentUser.email || '?').slice(0, 1).toUpperCase()}
+                </div>
+                <div className="min-w-0">
+                  <p className="font-black text-slate-800 truncate">{currentUser.name}</p>
+                  <p className="text-xs text-slate-400 truncate">{currentUser.email}</p>
+                  <span className="mt-1 inline-block text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">
+                    {currentUser.role === UserRole.ADMIN ? 'Administrador' : 'Assistente'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <p className="px-1 pb-2 text-[10px] font-black uppercase tracking-widest text-slate-400">
+                Notificações
+              </p>
+              <PushSetup userEmail={currentUser?.email} />
+            </div>
+
+            <button
+              onClick={handleLogout}
+              className="w-full py-3.5 rounded-2xl bg-white border text-red-600 font-black text-sm flex items-center justify-center gap-2"
+            >
+              <LogOut className="w-4 h-4" />
+              Sair
+            </button>
+
+            <p className="text-center text-[10px] text-slate-300 pt-2">
+              RNV Consultoria · agenda.rnvconsultoria.com
+            </p>
+          </div>
+        )}
+
         {activeTab === 'duplicates' && currentUser.role === UserRole.ADMIN && (
           <div className="space-y-6">
             <div>
