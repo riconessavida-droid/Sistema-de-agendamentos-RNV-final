@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { AlertTriangle, Mail, Phone, Video, X } from 'lucide-react';
 import { Client } from '../types';
 import { getMonthLabel } from '../constants';
@@ -12,6 +12,8 @@ interface AppointmentDetailProps {
   settings: SchedulingSettings;
   now: Date;
   onClose: () => void;
+  /** Cancela a reunião. Sem isto, o painel só olha e não age. */
+  onCancel?: (appointmentId: string) => Promise<string | null>;
 }
 
 /**
@@ -43,8 +45,23 @@ export function AppointmentDetail({
   client,
   settings,
   now,
-  onClose
+  onClose,
+  onCancel
 }: AppointmentDetailProps) {
+  const [confirmando, setConfirmando] = useState(false);
+  const [cancelando, setCancelando] = useState(false);
+  const [erroCancelar, setErroCancelar] = useState<string | null>(null);
+
+  const cancelar = async () => {
+    if (!onCancel) return;
+    setCancelando(true);
+    setErroCancelar(null);
+    const erro = await onCancel(appointment.id);
+    setCancelando(false);
+    if (erro) { setErroCancelar(erro); return; }
+    onClose();
+  };
+
   const startsAt = new Date(appointment.startsAt);
   const history = recentMeetings(client);
   const phone = formatPhone(appointment.attendeePhone ?? client?.phoneDigits ?? null);
@@ -138,6 +155,53 @@ export function AppointmentDetail({
               O cliente já não consegue cancelar sozinho (o prazo é de{' '}
               {settings.cancelMinNoticeHours}h antes).
             </p>
+          )}
+
+          {/* ------------------------------------------------- cancelar
+              O prazo mínimo vale para o cliente, não para quem administra
+              a agenda: às vezes é justamente em cima da hora que se precisa
+              desmarcar. Enquanto isto não existia, uma reunião marcada não
+              podia ser desfeita por ninguém — e o cliente ainda ficava
+              impedido de remarcar. */}
+          {appointment.status === 'CONFIRMED' && onCancel && (
+            <div className="pt-3 border-t border-slate-100">
+              {erroCancelar && (
+                <p className="text-xs font-bold text-red-600 mb-2">{erroCancelar}</p>
+              )}
+
+              {!confirmando ? (
+                <button
+                  onClick={() => setConfirmando(true)}
+                  className="w-full py-2.5 rounded-lg border border-red-200 text-red-600 text-xs font-black uppercase tracking-widest hover:bg-red-50 transition-colors"
+                >
+                  Cancelar reunião
+                </button>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    O horário volta a ficar livre, o convite sai da agenda do
+                    Google e a data é apagada da ficha do cliente. Ele não é
+                    avisado automaticamente.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setConfirmando(false)}
+                      disabled={cancelando}
+                      className="flex-1 py-2.5 rounded-lg text-xs font-bold text-slate-500 hover:bg-slate-100"
+                    >
+                      Voltar
+                    </button>
+                    <button
+                      onClick={cancelar}
+                      disabled={cancelando}
+                      className="flex-1 py-2.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-black uppercase tracking-widest disabled:opacity-50"
+                    >
+                      {cancelando ? 'Cancelando...' : 'Confirmar'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>

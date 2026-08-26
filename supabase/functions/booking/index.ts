@@ -713,18 +713,51 @@ Deno.serve(async (req: Request) => {
     } else {
       if (!name || !phone) return json({ ok: false, error: "missing_contact" }, 400);
 
-      // Sem link pessoal, evita que a mesma pessoa (ou um robô com o mesmo
-      // telefone) empilhe agendamentos futuros.
-      const { data: already } = await supabase
-        .from("appointments").select("id")
-        .eq("attendee_phone", phone).eq("status", "CONFIRMED")
-        .gte("starts_at", now.toISOString()).limit(1);
-      if (already && already.length > 0) {
-        return json({ ok: false, error: "already_booked" }, 409);
-      }
-
       // Cliente que já existe entra na ficha dele, não vira um estranho.
       clientId = await findClientId(supabase, phone, email, name);
+
+      /**
+       * Já tem reunião marcada? Depende de quem é.
+       *
+       * A trava existia para um robô não empilhar agendamentos com o mesmo
+       * telefone. Só que ela pegava também o cliente de verdade querendo
+       * remarcar — e como ele não tinha o link de gerenciamento à mão,
+       * ficava sem saída: não conseguia marcar nem desmarcar.
+       *
+       * Agora: quem é cliente cadastrado REMARCA (a reunião anterior é
+       * cancelada e a nova entra no lugar). Telefone desconhecido continua
+       * barrado, que era o caso que a trava queria pegar.
+       */
+      const { data: already } = await supabase
+        .from("appointments").select("id, google_event_id")
+        .eq("attendee_phone", phone).eq("status", "CONFIRMED")
+        .gte("starts_at", now.toISOString());
+
+      if (already && already.length > 0) {
+        if (!clientId) {
+          return json({ ok: false, error: "already_booked" }, 409);
+        }
+
+        for (const anterior of already) {
+          await supabase.from("appointments").update({
+            status: "CANCELED",
+            canceled_at: new Date().toISOString(),
+            cancel_reason: "Remarcado pelo cliente"
+          }).eq("id", anterior.id);
+
+          if (anterior.google_event_id) {
+            try {
+              const gtoken = await googleAccessToken(supabase);
+              if (gtoken) {
+                await fetch(
+                  `https://www.googleapis.com/calendar/v3/calendars/primary/events/${anterior.google_event_id}?sendUpdates=all`,
+                  { method: "DELETE", headers: { authorization: `Bearer ${gtoken}` } }
+                );
+              }
+            } catch { /* o Google falhar não impede a remarcação */ }
+          }
+        }
+      }
     }
 
     // O horário ainda é oferecível? (protege contra payload adulterado)
@@ -833,18 +866,47 @@ Deno.serve(async (req: Request) => {
 
   // -------------------------------------------------------------- manage
   if (action === "manage" || action === "cancel") {
+    /**
+     * Duas portas para a mesma reunião:
+     *
+     *   manageToken  — o cliente, pelo link que recebeu no e-mail
+     *   accessToken  — o Eduardo ou a assistente, pelo painel
+     *
+     * O painel precisava existir: sem ele, uma reunião marcada não podia
+     * ser desfeita por ninguém. O cliente ficava travado ao tentar remarcar
+     * ("você já tem reunião") e do lado de cá não havia botão nenhum — a
+     * única saída era mexer no banco à mão.
+     *
+     * Quem entra pelo painel tem a sessão conferida no Supabase antes de
+     * qualquer coisa. Não basta mandar `admin: true`.
+     */
     const manageToken: string = payload?.manageToken ?? "";
-    if (!manageToken) return json({ ok: false, error: "missing_token" }, 400);
+    const appointmentId: string = payload?.appointmentId ?? "";
+    const accessToken: string = payload?.accessToken ?? "";
 
-    const { data: appointment } = await supabase
-      .from("appointments").select("*").eq("manage_token", manageToken).maybeSingle();
+    let isAdmin = false;
+    if (!manageToken && appointmentId && accessToken) {
+      const { data: userData } = await supabase.auth.getUser(accessToken);
+      if (!userData?.user) return json({ ok: false, error: "unauthorized" }, 401);
+      isAdmin = true;
+    }
+
+    if (!manageToken && !isAdmin) return json({ ok: false, error: "missing_token" }, 400);
+
+    const { data: appointment } = isAdmin
+      ? await supabase.from("appointments").select("*").eq("id", appointmentId).maybeSingle()
+      : await supabase.from("appointments").select("*").eq("manage_token", manageToken).maybeSingle();
     if (!appointment) return json({ ok: false, error: "not_found" }, 404);
 
     const config = await loadConfig();
     const startsAt = new Date(appointment.starts_at);
+    // O prazo mínimo existe para o cliente não desmarcar em cima da hora.
+    // Para quem administra a agenda ele não faz sentido: às vezes é
+    // justamente em cima da hora que se precisa desmarcar.
     const cancelable =
       appointment.status === "CONFIRMED" &&
-      startsAt.getTime() - now.getTime() >= config.settings.cancel_min_notice_hours * MS_PER_HOUR;
+      (isAdmin ||
+        startsAt.getTime() - now.getTime() >= config.settings.cancel_min_notice_hours * MS_PER_HOUR);
 
     if (action === "manage") {
       return json({
@@ -866,7 +928,7 @@ Deno.serve(async (req: Request) => {
     await supabase.from("appointments").update({
       status: "CANCELED",
       canceled_at: new Date().toISOString(),
-      cancel_reason: "Cancelado pelo cliente"
+      cancel_reason: isAdmin ? "Cancelado pela RNV" : "Cancelado pelo cliente"
     }).eq("id", appointment.id);
 
     // Tira o evento da agenda do Google (e avisa o cliente pelo convite).

@@ -4,6 +4,7 @@ import { Client, UserRole } from '../types';
 import {
   SchedulingData,
   addBlock,
+  cancelAppointment,
   importEagendaBlocks,
   loadSchedulingData,
   removeBlock,
@@ -140,6 +141,16 @@ export function SchedulingTab({ clients, role, initialDay }: SchedulingTabProps)
     const error = await removeBlock(id);
     if (error) window.alert(`Não consegui liberar: ${error}`);
     else await reload();
+  };
+
+  /**
+   * Cancela e recarrega. O recarregar importa: o horário precisa voltar a
+   * aparecer como livre na mesma hora, senão parece que não funcionou.
+   */
+  const handleCancelAppointment = async (appointmentId: string): Promise<string | null> => {
+    const erro = await cancelAppointment(appointmentId);
+    if (!erro) await reload();
+    return erro;
   };
 
   const handleImport = async () => {
@@ -311,6 +322,7 @@ export function SchedulingTab({ clients, role, initialDay }: SchedulingTabProps)
           settings={data.settings}
           now={now}
           onClose={() => setSelected(null)}
+          onCancel={handleCancelAppointment}
         />
       )}
     </div>

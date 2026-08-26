@@ -280,6 +280,35 @@ export type NewBlock = {
   reason?: string;
 };
 
+/**
+ * Cancela uma reunião pelo painel.
+ *
+ * Vai pela mesma Edge Function que o cliente usa, e não direto na tabela,
+ * porque cancelar não é só mudar um status: tem de apagar o evento do
+ * Google (senão o convite continua na agenda de todo mundo) e limpar a
+ * data do mês na ficha do cliente. Duplicar isso aqui seria criar uma
+ * segunda verdade que uma hora divergiria da primeira.
+ *
+ * A sessão do usuário vai junto e é conferida do outro lado.
+ */
+export const cancelAppointment = async (appointmentId: string): Promise<string | null> => {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const accessToken = sessionData?.session?.access_token;
+  if (!accessToken) return 'Sessão expirada. Entre de novo para cancelar.';
+
+  const { data, error } = await supabase.functions.invoke('booking', {
+    body: { action: 'cancel', appointmentId, accessToken }
+  });
+
+  if (error) return error.message;
+  if (data && data.ok === false) {
+    if (data.error === 'unauthorized') return 'Sessão expirada. Entre de novo para cancelar.';
+    if (data.error === 'not_found') return 'Reunião não encontrada.';
+    return data.error ?? 'Não consegui cancelar.';
+  }
+  return null;
+};
+
 export const addBlock = async (block: NewBlock): Promise<string | null> => {
   const { error } = await supabase.from('schedule_blocks').insert({
     date_from: block.dateFrom,
