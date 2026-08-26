@@ -42,6 +42,23 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Sora:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
+        /* ---------------------------------------------------------------
+           O iPhone dá zoom sozinho em qualquer campo com fonte menor que
+           16px — e depois NÃO desfaz. O Eduardo digitava um nome na busca
+           e ficava com a tela ampliada, tendo que pinçar para voltar.
+
+           Forçar 16px nos campos no celular resolve na origem: sem gatilho,
+           sem zoom. Só abaixo de 1024px, para o computador manter os
+           tamanhos escolhidos no layout.
+           --------------------------------------------------------------- */
+        @media (max-width: 1023px) {
+          input,
+          select,
+          textarea {
+            font-size: 16px !important;
+          }
+        }
+
         /* O sistema interno segue com Inter. A tipografia da marca
            (Sora + IBM Plex) é aplicada nas páginas que o CLIENTE vê. */
         body { font-family: 'Inter', sans-serif; }

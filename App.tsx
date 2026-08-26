@@ -154,15 +154,21 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
   const [draggingClientId, setDraggingClientId] = useState<string | null>(null);
   const [dragOverMonth, setDragOverMonth] = useState<string | null>(null);
   /**
-   * Qual mes o faturamento mostra no celular.
+   * Qual mês o faturamento mostra no celular.
    *
    * No computador os meses ficam lado a lado numa faixa que rola. Em
-   * 390px isso vira uma tela que "danca": nenhuma coluna cabe inteira e
-   * arrastar perde a referencia de qual mes esta sendo lido. No celular
-   * passa a ser um mes por vez, com setas — mesma informacao, sem o
-   * deslizar lateral.
+   * 390px isso vira uma tela que "dança": nenhuma coluna cabe inteira e
+   * arrastar perde a referência de qual mês está sendo lido. No celular
+   * passa a ser um mês por vez, com setas.
+   *
+   * `null` = o usuário ainda não navegou, então vale o mês corrente.
+   * Tentei fazer isso com um efeito que posicionava depois da primeira
+   * renderização e não funcionava: dependia de o faturamento já estar
+   * calculado naquele instante, e nem sempre estava. Derivar na hora de
+   * exibir não tem esse problema — e continua respeitando a navegação,
+   * porque a partir do primeiro clique o estado deixa de ser null.
    */
-  const [billingMonthIndex, setBillingMonthIndex] = useState(0);
+  const [billingMonthIndex, setBillingMonthIndex] = useState<number | null>(null);
   const [historySearch, setHistorySearch] = useState('');
   const [boardBookings, setBoardBookings] = useState<EagendaBooking[]>([]);
   const [loadingBoard, setLoadingBoard] = useState(false);
@@ -1224,28 +1230,7 @@ const billingData = useMemo(() => {
     return { totalAtivos, totalFinalizados, totalAtencao, entradas, labelEntradas: getMonthLabel(target) };
   }, [clients, filterMonth]);
 
-  /**
-   * Faturamento abre no mês corrente, não em janeiro.
-   *
-   * A lista começa no primeiro mês com cliente — janeiro/2026 — e no
-   * celular isso obrigava a avançar oito vezes antes de ver a expectativa
-   * do mês em curso, que é o número que interessa ao abrir a tela.
-   *
-   * Roda só uma vez, quando os meses aparecem: depois disso a posição é
-   * de quem está navegando, e reposicionar seria tirar o controle da mão.
-   */
-  const billingPositioned = useRef(false);
-  useEffect(() => {
-    if (billingPositioned.current) return;
-    const meses = billingData?.months ?? [];
-    if (meses.length === 0) return;
 
-    const hoje = new Date();
-    const atual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
-    const idx = meses.indexOf(atual);
-    setBillingMonthIndex(idx >= 0 ? idx : meses.length - 1);
-    billingPositioned.current = true;
-  }, [billingData]);
 
   if (!currentUser) return <Auth onLogin={handleLogin} />;
 
@@ -2419,21 +2404,40 @@ const billingData = useMemo(() => {
       </div>
 
       <div className="overflow-auto max-h-[75vh]">
+        {(() => {
+          /**
+           * O mês em foco: o que o usuário escolheu nas setas ou, enquanto
+           * ele não escolheu nada, o mês corrente. A lista de meses começa
+           * em janeiro/2026 (primeiro cliente), então sem isto a tela abria
+           * oito meses antes do número que interessa.
+           *
+           * Se o mês de hoje não estiver na lista — só aconteceria se o
+           * faturamento terminasse no passado — cai no último, que é o mais
+           * próximo do presente.
+           */
+          const hoje = new Date();
+          const chaveHoje = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
+          const indiceHoje = billingData.months.indexOf(chaveHoje);
+          const mesEmFoco = billingMonthIndex
+            ?? (indiceHoje >= 0 ? indiceHoje : Math.max(0, billingData.months.length - 1));
+          const ultimo = billingData.months.length - 1;
+          return (
+        <>
         {/* Setas de mes — so no celular. */}
         <div className="lg:hidden flex items-center justify-between px-4 py-3 border-b bg-slate-50">
           <button
-            onClick={() => setBillingMonthIndex(i => Math.max(0, i - 1))}
-            disabled={billingMonthIndex === 0}
+            onClick={() => setBillingMonthIndex(Math.max(0, mesEmFoco - 1))}
+            disabled={mesEmFoco === 0}
             className="px-3 py-2 rounded-lg bg-white border text-slate-600 text-xs font-black disabled:opacity-30"
           >
             &lsaquo; Anterior
           </button>
           <span className="text-xs font-black uppercase tracking-widest text-slate-600">
-            {getMonthLabel(billingData.months[billingMonthIndex] ?? billingData.months[0] ?? '')}
+            {getMonthLabel(billingData.months[mesEmFoco] ?? '')}
           </span>
           <button
-            onClick={() => setBillingMonthIndex(i => Math.min(billingData.months.length - 1, i + 1))}
-            disabled={billingMonthIndex >= billingData.months.length - 1}
+            onClick={() => setBillingMonthIndex(Math.min(ultimo, mesEmFoco + 1))}
+            disabled={mesEmFoco >= ultimo}
             className="px-3 py-2 rounded-lg bg-white border text-slate-600 text-xs font-black disabled:opacity-30"
           >
             Proximo &rsaquo;
@@ -2444,7 +2448,7 @@ const billingData = useMemo(() => {
           
           {billingData.months.map((month, monthIdx) => {
             // No celular, so o mes escolhido nas setas acima.
-            const escondidoNoCelular = monthIdx !== billingMonthIndex;
+            const escondidoNoCelular = monthIdx !== mesEmFoco;
             const clientsThisMonth = billingData.billingByMonth[month] || [];
             const total = billingData.totals[month] || 0;
             // meio-dia local evita voltar para o mês anterior no fuso do Brasil (UTC-3)
@@ -2584,6 +2588,9 @@ const billingData = useMemo(() => {
           })}
 
         </div>
+        </>
+          );
+        })()}
       </div>
     </div>
 
