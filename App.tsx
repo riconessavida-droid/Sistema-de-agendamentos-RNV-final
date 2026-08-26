@@ -153,6 +153,16 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
   const [savingPeriod, setSavingPeriod] = useState(false);
   const [draggingClientId, setDraggingClientId] = useState<string | null>(null);
   const [dragOverMonth, setDragOverMonth] = useState<string | null>(null);
+  /**
+   * Qual mes o faturamento mostra no celular.
+   *
+   * No computador os meses ficam lado a lado numa faixa que rola. Em
+   * 390px isso vira uma tela que "danca": nenhuma coluna cabe inteira e
+   * arrastar perde a referencia de qual mes esta sendo lido. No celular
+   * passa a ser um mes por vez, com setas — mesma informacao, sem o
+   * deslizar lateral.
+   */
+  const [billingMonthIndex, setBillingMonthIndex] = useState(0);
   const [historySearch, setHistorySearch] = useState('');
   const [boardBookings, setBoardBookings] = useState<EagendaBooking[]>([]);
   const [loadingBoard, setLoadingBoard] = useState(false);
@@ -2390,9 +2400,32 @@ const billingData = useMemo(() => {
       </div>
 
       <div className="overflow-auto max-h-[75vh]">
-        <div className="inline-flex gap-4 p-6 min-w-full">
+        {/* Setas de mes — so no celular. */}
+        <div className="lg:hidden flex items-center justify-between px-4 py-3 border-b bg-slate-50">
+          <button
+            onClick={() => setBillingMonthIndex(i => Math.max(0, i - 1))}
+            disabled={billingMonthIndex === 0}
+            className="px-3 py-2 rounded-lg bg-white border text-slate-600 text-xs font-black disabled:opacity-30"
+          >
+            &lsaquo; Anterior
+          </button>
+          <span className="text-xs font-black uppercase tracking-widest text-slate-600">
+            {getMonthLabel(billingData.months[billingMonthIndex] ?? billingData.months[0] ?? '')}
+          </span>
+          <button
+            onClick={() => setBillingMonthIndex(i => Math.min(billingData.months.length - 1, i + 1))}
+            disabled={billingMonthIndex >= billingData.months.length - 1}
+            className="px-3 py-2 rounded-lg bg-white border text-slate-600 text-xs font-black disabled:opacity-30"
+          >
+            Proximo &rsaquo;
+          </button>
+        </div>
+
+        <div className="flex flex-col lg:inline-flex lg:flex-row gap-4 p-4 lg:p-6 min-w-full">
           
-          {billingData.months.map((month) => {
+          {billingData.months.map((month, monthIdx) => {
+            // No celular, so o mes escolhido nas setas acima.
+            const escondidoNoCelular = monthIdx !== billingMonthIndex;
             const clientsThisMonth = billingData.billingByMonth[month] || [];
             const total = billingData.totals[month] || 0;
             // meio-dia local evita voltar para o mês anterior no fuso do Brasil (UTC-3)
@@ -2401,7 +2434,7 @@ const billingData = useMemo(() => {
             return (
               <div
                 key={month}
-                className={`flex flex-col gap-2 min-w-[220px] rounded-xl transition-all ${dragOverMonth === month && draggingClientId ? 'ring-2 ring-yellow-400 bg-yellow-50/30' : ''}`}
+                className={`flex flex-col gap-2 w-full lg:w-auto lg:min-w-[220px] rounded-xl transition-all ${escondidoNoCelular ? 'hidden lg:flex' : ''} ${dragOverMonth === month && draggingClientId ? 'ring-2 ring-yellow-400 bg-yellow-50/30' : ''}`}
                 onDragOver={(e) => { e.preventDefault(); setDragOverMonth(month); }}
                 onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverMonth(null); }}
                 onDrop={async (e) => {

@@ -38,7 +38,21 @@ interface SchedulingTabProps {
 export function SchedulingTab({ clients, role, initialDay }: SchedulingTabProps) {
   const [now, setNow] = useState(() => new Date());
   const [anchorDay, setAnchorDay] = useState<DayKey>(() => initialDay || toDayKey(new Date()));
-  const [subTab, setSubTab] = useState<SubTab>(initialDay ? 'day' : 'week');
+  /**
+   * No celular abre na Lista do Dia; no computador, na semana.
+   *
+   * A grade semanal tem sete colunas e não cabe em 390px — o Eduardo
+   * precisava arrastar a tela para os lados e ainda assim não conseguia
+   * ler o dia inteiro. A lista de um dia só mostra exatamente o que ele
+   * quer no telefone: os horários daquele dia, com Anterior e Próximo
+   * para andar. No computador a semana continua sendo a melhor visão, e
+   * as duas seguem disponíveis nos dois tamanhos.
+   */
+  const [subTab, setSubTab] = useState<SubTab>(() => {
+    if (initialDay) return 'day';
+    const noCelular = typeof window !== 'undefined' && window.innerWidth < 1024;
+    return noCelular ? 'day' : 'week';
+  });
   const [data, setData] = useState<SchedulingData>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Appointment | null>(null);
