@@ -858,14 +858,24 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
      * FUTURA, que é a única que interessa a quem está conferindo se o
      * cliente já agendou.
      */
-    const agora = new Date().toISOString();
+    /**
+     * "Conciliado" é ter VÍNCULO, não ter reunião futura.
+     *
+     * Tentei mostrar só a próxima reunião futura e quebrei a tela: todo
+     * cliente cuja última reunião já passou virou "sem agendamento", mesmo
+     * estando vinculado corretamente. O contador (que olha o vínculo) e a
+     * lista (que passou a olhar a data) começaram a discordar.
+     *
+     * Então volta a valer o agendamento MAIS RECENTE de cada cliente,
+     * tenha acontecido ou não — o que muda em relação ao original é que
+     * agora o nosso próprio sistema entra na conta, e não só o eAgenda.
+     */
     const byClient = new Map<string, { quando: string; origem: 'sistema' | 'eagenda'; booking: EagendaBooking | null }>();
 
     boardBookings.forEach(b => {
       if (!b.matchedClientId) return;
-      if (b.startDateTime < agora) return;
       const cur = byClient.get(b.matchedClientId);
-      if (!cur || b.startDateTime < cur.quando) {
+      if (!cur || b.startDateTime > cur.quando) {
         byClient.set(b.matchedClientId, { quando: b.startDateTime, origem: 'eagenda', booking: b });
       }
     });
@@ -873,7 +883,7 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
     ownAppointments.forEach(a => {
       if (!a.clientId) return;
       const cur = byClient.get(a.clientId);
-      if (!cur || a.startsAt < cur.quando) {
+      if (!cur || a.startsAt > cur.quando) {
         byClient.set(a.clientId, { quando: a.startsAt, origem: 'sistema', booking: null });
       }
     });
@@ -943,7 +953,6 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
   // cliente ativo certo pode "recuperar" o agendamento preso na duplicata.
   const candidates = useMemo(() => {
     const activeIds = new Set(activeClients.map(c => c.id));
-    const agora = new Date().toISOString();
 
     const soltos = boardBookings.filter(b =>
       (b.conciliationStatus === 'PENDING' && !b.matchedClientId) ||
@@ -951,23 +960,23 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
     );
 
     /**
-     * Um por pessoa, e só o que ainda vai acontecer.
+     * Um por pessoa — mas sem filtrar por data.
      *
-     * A lista mostrava o histórico inteiro do eAgenda: a mesma pessoa
-     * aparecia três, quatro vezes com datas de meses atrás, e escolher
-     * virava adivinhação. Conciliar é dizer "este cliente é esta pessoa" —
-     * para isso basta uma ocorrência, e a que importa é a próxima.
+     * A repetição atrapalhava mesmo: a mesma pessoa aparecia três, quatro
+     * vezes e escolher virava adivinhação. Mas quando tentei mostrar só os
+     * futuros sobrou UM nome na lista inteira: quase todo agendamento solto
+     * é de reunião que já aconteceu, e é justamente esse que precisa ser
+     * amarrado ao cliente. Fica a ocorrência mais recente de cada pessoa.
      */
     const porPessoa = new Map<string, EagendaBooking>();
-    soltos
-      .filter(b => b.startDateTime >= agora)
-      .forEach(b => {
-        const chave = b.personKey || normalizeName(b.attendeeName ?? '') || b.appointmentKey;
-        const cur = porPessoa.get(chave);
-        if (!cur || b.startDateTime < cur.startDateTime) porPessoa.set(chave, b);
-      });
+    soltos.forEach(b => {
+      const chave = b.personKey || normalizeName(b.attendeeName ?? '') || b.appointmentKey;
+      const cur = porPessoa.get(chave);
+      if (!cur || b.startDateTime > cur.startDateTime) porPessoa.set(chave, b);
+    });
 
-    return Array.from(porPessoa.values());
+    return Array.from(porPessoa.values())
+      .sort((a, b) => b.startDateTime.localeCompare(a.startDateTime));
   }, [boardBookings, activeClients]);
 
   // Ordena os candidatos por semelhança de nome com o cliente (melhor sugestão 1º).
