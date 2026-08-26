@@ -269,12 +269,24 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
 
   const loadOwnAppointments = async () => {
     if (!currentUser) return;
+    /**
+     * Sem filtrar por data.
+     *
+     * Carregava só os futuros e a Michele e a Ana Carolina sumiam da
+     * Conciliação: as reuniões delas já tinham acontecido. É a mesma
+     * confusão de antes — nesta tela o que importa é o VÍNCULO, e reunião
+     * do mês passado vincula tanto quanto a de amanhã.
+     *
+     * O limite existe só para não arrastar anos de histórico à toa: a tela
+     * mostra o agendamento mais recente de cada cliente, então o que veio
+     * antes disso não muda nada do que ela exibe.
+     */
     const { data, error } = await supabase
       .from('appointments')
       .select('id, client_id, attendee_name, starts_at')
       .eq('status', 'CONFIRMED')
-      .gte('starts_at', new Date().toISOString())
-      .order('starts_at');
+      .order('starts_at', { ascending: false })
+      .limit(500);
     if (!error && data) {
       setOwnAppointments(data.map((r: any) => ({
         id: r.id,
