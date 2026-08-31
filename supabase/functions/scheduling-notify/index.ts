@@ -155,7 +155,34 @@ Deno.serve(async (req: Request) => {
 
   const meetings = appointments ?? [];
 
-  if (meetings.length === 0) {
+  /**
+   * O resumo olha as DUAS agendas.
+   *
+   * Enquanto o eAgenda existir, um cliente ou outro ainda marca por lá — e
+   * essas reuniões não entravam no aviso da véspera. Foi o caso de uma
+   * reunião das 8:30 que só existia no eAgenda: o dia começou sem ela no
+   * resumo.
+   *
+   * A busca vem ANTES do corte abaixo de propósito. Um dia que só tenha
+   * reunião do eAgenda ainda é um dia com reunião, e antes ele caía fora
+   * aqui mesmo, sem aviso nenhum.
+   *
+   * Quando o eAgenda for desligado a tabela para de crescer e isto passa a
+   * não devolver nada — não precisa ser desfeito.
+   */
+  const { data: eagendaAmanha } = await supabase
+    .from("eagenda_bookings")
+    .select("attendee_name, start_datetime, event_status")
+    .gte("start_datetime", zonedToInstant(tomorrow, "00:00").toISOString())
+    .lt("start_datetime", zonedToInstant(addDays(tomorrow, 1), "00:00").toISOString());
+
+  // O status vem escrito do jeito que o eAgenda manda; fica de fora só o
+  // que não vai acontecer.
+  const DESCARTADOS = new Set(["CANCELED", "NO_SHOW"]);
+  const eagendaAtivas = (eagendaAmanha ?? [])
+    .filter((b: any) => !DESCARTADOS.has(String(b.event_status ?? "").toUpperCase()));
+
+  if (meetings.length === 0 && eagendaAtivas.length === 0) {
     return json({ ok: true, day: tomorrow, meetings: 0, note: "nenhuma reunião amanhã" });
   }
 
@@ -226,8 +253,6 @@ Deno.serve(async (req: Request) => {
   }
 
   // -------------------------------------------------------- resumo do dia
-  const times = meetings.map(m => toTimeKey(new Date(m.starts_at))).sort();
-
   const shortName = (full: string): string =>
     cleanText(full).split(" ").filter(Boolean).slice(0, 2).join(" ");
 
@@ -240,23 +265,42 @@ Deno.serve(async (req: Request) => {
    * `contract_pending` marca quem vai sentar com o Eduardo sem ter
    * assinado — assim ele vê isso de manhã, sem precisar de outro aviso.
    */
-  const meetingRows = meetings
-    .slice()
-    .sort((a, b) => String(a.starts_at).localeCompare(String(b.starts_at)))
-    .map(m => {
-      const client = m.client_id ? clientById.get(m.client_id) : null;
-      return {
-        time: toTimeKey(new Date(m.starts_at)),
-        name: shortName(client?.name ?? m.attendee_name ?? "sem nome"),
-        contract_pending: client ? client.contract_signed === false : false
-      };
-    });
+  const linhasProprias = meetings.map(m => {
+    const client = m.client_id ? clientById.get(m.client_id) : null;
+    return {
+      // O instante em número, e não o texto da data: as duas tabelas
+      // escrevem o mesmo horário de formas diferentes, e comparar texto
+      // faria a mesma reunião passar por duas.
+      at: new Date(m.starts_at).getTime(),
+      time: toTimeKey(new Date(m.starts_at)),
+      name: shortName(client?.name ?? m.attendee_name ?? "sem nome"),
+      contract_pending: client ? client.contract_signed === false : false
+    };
+  });
+
+  const linhasEagenda = eagendaAtivas.map((b: any) => ({
+    at: new Date(b.start_datetime).getTime(),
+    time: toTimeKey(new Date(b.start_datetime)),
+    name: shortName(b.attendee_name ?? "sem nome"),
+    // Quem marcou pelo eAgenda não tem ficha aqui, então não dá para saber
+    // se assinou — melhor não afirmar o que não se sabe.
+    contract_pending: false
+  }));
+
+  // O mesmo horário nas duas agendas é uma reunião só: o eAgenda foi
+  // importado para cá e as duas fontes se sobrepõem.
+  const vistos = new Set(linhasProprias.map(l => l.at));
+  const meetingRows = [...linhasProprias, ...linhasEagenda.filter(l => !vistos.has(l.at))]
+    .sort((a, b) => a.at - b.at)
+    .map(({ at: _at, ...linha }) => linha);
+
+  const totalReunioes = meetingRows.length;
 
   const summaryPayload = {
     summary_date: `${tomorrow.slice(8)}/${tomorrow.slice(5, 7)}`,
-    meeting_count: String(meetings.length),
-    first_time: times[0],
-    last_time: times[times.length - 1],
+    meeting_count: String(totalReunioes),
+    first_time: meetingRows[0]?.time ?? "",
+    last_time: meetingRows[meetingRows.length - 1]?.time ?? "",
     meetings: meetingRows,
     day_url: siteUrl ? `${siteUrl}/dia/${tomorrow}` : null
   };
@@ -273,7 +317,7 @@ Deno.serve(async (req: Request) => {
     // Além do e-mail, a notificação no celular — que chega mesmo com o
     // aparelho bloqueado e não depende de ele abrir a caixa de entrada.
     try {
-      const lista = meetingRows.map(m => `${m.time} ${m.name}`).join(" · ");
+      const lista = meetingRows.map(m => `${m.time} — ${m.name}`).join("\n");
       await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/send-push`, {
         method: "POST",
         headers: {
@@ -281,8 +325,13 @@ Deno.serve(async (req: Request) => {
           authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`
         },
         body: JSON.stringify({
-          title: `Amanhã: ${meetings.length} ${meetings.length === 1 ? "reunião" : "reuniões"}`,
-          body: lista,
+          /**
+           * O iPhone já escreve "de RNV Consultoria" embaixo, então repetir
+           * a contagem no título deixava a notificação com cara de sistema.
+           * O nome vem na frente e o recado embaixo, como uma mensagem.
+           */
+          title: "RNV Consultoria",
+          body: `Amanhã você tem ${totalReunioes} ${totalReunioes === 1 ? "reunião" : "reuniões"}:\n${lista}`,
           url: siteUrl ? `/dia/${tomorrow}` : "/",
           tag: `resumo-${tomorrow}`
         })
@@ -301,5 +350,5 @@ Deno.serve(async (req: Request) => {
     summary = { skipped: "ADMIN_EMAIL não configurado" };
   }
 
-  return json({ ok: true, dryRun, day: tomorrow, meetings: meetings.length, reminders, summary });
+  return json({ ok: true, dryRun, day: tomorrow, meetings: totalReunioes, reminders, summary });
 });
