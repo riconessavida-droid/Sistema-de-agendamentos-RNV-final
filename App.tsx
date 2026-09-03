@@ -516,13 +516,56 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
       s => s.status === MeetingStatus.CLOSED_CONTRACT || s.status === MeetingStatus.CANCELLED_EARLY
     );
 
+  /**
+   * A mesma data, N meses depois — respeitando mês curto.
+   *
+   * Quem começou dia 31 de março não tem "31 de junho": a cobrança cai no
+   * dia 30. Somar mês no JavaScript sem isso empurraria para 1º de julho.
+   */
+  const mesmaDataMesesDepois = (ano: number, mesZeroBase: number, dia: number, meses: number): Date => {
+    const alvo = new Date(ano, mesZeroBase + meses, 1);
+    const ultimoDiaDoMes = new Date(alvo.getFullYear(), alvo.getMonth() + 1, 0).getDate();
+    return new Date(alvo.getFullYear(), alvo.getMonth(), Math.min(dia, ultimoDiaDoMes));
+  };
+
+  /**
+   * São 4 datas de fechamento, contadas do dia em que o cliente começou:
+   * a 1ª no próprio dia de início e as outras três de mês em mês. O
+   * laranja acende quando chega a 4ª.
+   *
+   * Começou 9 de abril? 9/4 é a 1ª, 9/5 a 2ª, 9/6 a 3ª e 9/7 a 4ª — a
+   * partir de 9 de julho ele entra no ciclo de cobrança.
+   */
+  const COBRANCAS_ATE_O_LARANJA = 4;
+
   const isOrangeClient = (client: Client) => {
-  if (isClientInactive(client)) return false;
-  const totalMeetings = 5 + (client.extraMeetings ?? 0);
-  const cycleMonths = getNextMonths(client.startMonthYear, totalMeetings);
-  const doneCount = cycleMonths.filter(m => client.statusByMonth[m]?.status === MeetingStatus.DONE).length;
-  return doneCount === totalMeetings - 1;
-};
+    if (isClientInactive(client)) return false;
+
+    /**
+     * O laranja é CALENDÁRIO, não reunião feita.
+     *
+     * Antes ele acendia quando o cliente tinha 4 das 5 reuniões marcadas
+     * como feitas. Isso deixava de fora justamente quem precisa ser
+     * cobrado: cliente que parou de aparecer nunca chegava às 4 reuniões,
+     * então nunca ficava laranja — e a Keyla, a Patrícia, a Jucira, a
+     * Talita e o Rafael passaram do prazo sem sinal nenhum na tela.
+     *
+     * A cobrança não espera a reunião acontecer. A data chegou, cobra.
+     */
+    const [ano, mes] = client.startMonthYear.split('-').map(Number);
+    if (!ano || !mes) return false;
+
+    const quartaCobranca = mesmaDataMesesDepois(
+      ano,
+      mes - 1,
+      client.startDate || 1,
+      COBRANCAS_ATE_O_LARANJA - 1
+    );
+
+    const hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
+    return hoje >= quartaCobranca;
+  };
 
 const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor' | 'sequenceInMonth'>) => {
   const colorIndex = clients.length % GROUP_COLORS.length;

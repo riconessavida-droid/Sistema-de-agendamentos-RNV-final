@@ -905,9 +905,11 @@ Deno.serve(async (req) => {
       }, { onConflict: "doc_uuid" });
 
       // ------------------------------------------------- avisa o Eduardo
+      // Sem "ele" nem "ela": o D4Sign devolve só o nome, e errar o gênero
+      // de um cliente numa mensagem é o tipo de detalhe que fica marcado.
       const statusLine = cpfValid
         ? "Pode iniciar a consultoria."
-        : "Atenção: o CPF informado é inválido (" + formatCpf(signerCpfDigits) + "). Peça para ele refazer.";
+        : "O CPF informado é inválido (" + formatCpf(signerCpfDigits) + "). Peça para refazer.";
 
       // Notificação no celular, além do WhatsApp. É o canal que não
       // depende de terceiro nenhum — e o único que sobrou de pé nas
@@ -920,8 +922,12 @@ Deno.serve(async (req) => {
             authorization: "Bearer " + Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"),
           },
           body: JSON.stringify({
-            title: cpfValid ? "Contrato assinado" : "Contrato com problema",
-            body: signerName + " — " + statusLine,
+            // Mesmo padrão do resto: o nome da empresa em cima (o celular
+            // já repete "de RNV Consultoria" embaixo) e o recado no corpo.
+            title: "RNV Consultoria",
+            body: cpfValid
+              ? firstName(signerName) + " assinou o contrato. " + statusLine
+              : firstName(signerName) + " assinou, mas o contrato precisa de você. " + statusLine,
             tag: "contrato-" + doc.uuid,
           }),
         });

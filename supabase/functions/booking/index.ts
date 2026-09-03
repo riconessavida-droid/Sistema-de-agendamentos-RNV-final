@@ -849,10 +849,17 @@ Deno.serve(async (req: Request) => {
       meetUrl: meet.meetUrl ?? null
     });
 
-    // O aviso que o Eduardo pediu: saber na hora que alguém marcou.
+    /**
+     * O aviso que o Eduardo pediu: saber na hora que alguém marcou.
+     *
+     * O título é só o nome da empresa porque o iPhone já escreve "de RNV
+     * Consultoria" embaixo da notificação — pôr o assunto ali em cima
+     * fazia a frase aparecer partida em dois lugares. O recado inteiro
+     * fica no corpo, como uma mensagem que alguém mandaria.
+     */
     await pushAviso(
-      "Novo agendamento",
-      `${name || "Um cliente"} marcou para ${meetingLabel(startsAt)}.`,
+      "RNV Consultoria",
+      `${name || "Um cliente"} acabou de marcar uma reunião para ${meetingLabel(startsAt)}.`,
       "/"
     );
 
