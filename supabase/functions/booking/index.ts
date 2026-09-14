@@ -2,9 +2,10 @@
 // Edge Function: booking
 // Atende a PÁGINA PÚBLICA de agendamento (a que substitui o eAgenda).
 //
-// Quatro ações, numa função só para o deploy manual ser um só:
+// Cinco ações, numa função só para o deploy manual ser um só:
 //   availability -> horários livres (link pessoal ou geral)
 //   create       -> cria o agendamento
+//   admin_create -> o painel marca em nome de um cliente cadastrado
 //   manage       -> dados da página "sua reunião"
 //   cancel       -> cancela (respeitando o prazo mínimo)
 //
@@ -328,7 +329,7 @@ async function sendConfirmation(supabase: any, input: {
   appointmentId: string; name: string; phone: string | null;
   email: string | null; startsAt: Date; manageToken: string;
   meetUrl?: string | null;
-}): Promise<void> {
+}): Promise<{ ok: boolean; detail: string | null }> {
   const email = cleanText(input.email);
 
   // Sem endereço não há o que enviar — mas fica registrado, porque é
@@ -340,7 +341,7 @@ async function sendConfirmation(supabase: any, input: {
       ok: false,
       detail: "cliente sem e-mail"
     });
-    return;
+    return { ok: false, detail: "cliente sem e-mail" };
   }
 
   const siteUrl = cleanUrl(Deno.env.get("SITE_URL"));
@@ -384,6 +385,8 @@ async function sendConfirmation(supabase: any, input: {
     ok,
     detail
   });
+
+  return { ok, detail };
 }
 
 // ------------------------------------------------------------- Google
@@ -518,6 +521,91 @@ async function createMeetEvent(supabase: any, appointment: {
   } catch (e) {
     return { error: String(e) };
   }
+}
+
+/** "(34) 99670-5992" — o mesmo jeito que a ficha mostra quando é digitada à mão. */
+const formatPhoneBr = (raw: string): string => {
+  const d = normalizePhone(raw);
+  if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+  if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return d;
+};
+
+/**
+ * Leva o agendamento para a ficha do cliente, numa escrita só:
+ *  - a data do mês no statusByMonth, que é o que o resto do sistema lê
+ *    (dentro do mês vale o maior dia: remarcação para a frente ganha);
+ *  - telefone e e-mail, SE a ficha ainda não tiver.
+ *
+ * O segundo item é o que faltava. Ficha criada pela assinatura do contrato
+ * nasce sem telefone — o D4Sign não informa — e quem completava era o
+ * eAgenda. Com o eAgenda desligado ninguém completava, e a ficha ficava sem
+ * número mesmo o cliente tendo digitado o telefone ao agendar.
+ *
+ * Nunca sobrescreve: ficha que já tem telefone continua com o dela.
+ */
+async function mirrorOnClient(
+  supabase: any, clientId: string, day: string,
+  contact: { phone: string | null; email: string | null },
+): Promise<void> {
+  const { data: clientRow } = await supabase
+    .from("clients").select("status_by_month, phone_digits, email").eq("id", clientId).maybeSingle();
+  if (!clientRow) return;
+
+  const patch: Record<string, unknown> = {};
+
+  const monthKey = day.slice(0, 7);
+  const dayOfMonth = Number(day.slice(8));
+  const statusByMonth = { ...(clientRow.status_by_month ?? {}) };
+  const current = statusByMonth[monthKey] ?? { status: "PENDING" };
+  if (!current.customDate || dayOfMonth >= current.customDate) {
+    statusByMonth[monthKey] = { ...current, customDate: dayOfMonth };
+    patch.status_by_month = statusByMonth;
+  }
+
+  if (normalizePhone(clientRow.phone_digits ?? "").length < 10 && contact.phone) {
+    patch.phone_digits = formatPhoneBr(contact.phone);
+  }
+  if (!cleanText(clientRow.email) && contact.email) {
+    patch.email = contact.email;
+  }
+
+  if (Object.keys(patch).length > 0) {
+    await supabase.from("clients").update(patch).eq("id", clientId);
+  }
+}
+
+/**
+ * Evento no Google com link do Meet, e depois a confirmação por e-mail.
+ * Nessa ordem de propósito: o e-mail já sai com o link da videochamada.
+ * Nenhuma das duas desfaz o agendamento se falhar.
+ */
+async function attachMeetAndConfirm(supabase: any, input: {
+  appointmentId: string; startsAt: Date; endsAt: Date; name: string;
+  phone: string | null; email: string | null; manageToken: string;
+}): Promise<{ meetUrl: string | null; confirmation: { ok: boolean; detail: string | null } }> {
+  const meet = await createMeetEvent(supabase, {
+    startsAt: input.startsAt, endsAt: input.endsAt, name: input.name, email: input.email
+  });
+
+  await supabase.from("appointments").update({
+    meet_url: meet.meetUrl ?? null,
+    google_event_id: meet.eventId ?? null,
+    meet_attempts: 1,
+    meet_error: meet.error ?? null
+  }).eq("id", input.appointmentId);
+
+  const confirmation = await sendConfirmation(supabase, {
+    appointmentId: input.appointmentId,
+    name: input.name,
+    phone: input.phone,
+    email: input.email,
+    startsAt: input.startsAt,
+    manageToken: input.manageToken,
+    meetUrl: meet.meetUrl ?? null
+  });
+
+  return { meetUrl: meet.meetUrl ?? null, confirmation };
 }
 
 /** Última data de reunião do cliente, lida do statusByMonth. */
@@ -798,21 +886,10 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: duplicated ? "slot_taken" : "insert_failed" }, duplicated ? 409 : 500);
     }
 
-    // Espelha a data no statusByMonth, que é o que o resto do sistema lê.
-    // O nosso agendamento tem precedência sobre o eAgenda.
+    // A data vai para a ficha, e o telefone/e-mail digitados completam o
+    // que faltar nela. O nosso agendamento tem precedência sobre o eAgenda.
     if (clientId) {
-      const monthKey = `${day.slice(0, 4)}-${day.slice(5, 7)}`;
-      const dayOfMonth = Number(day.slice(8));
-      const { data: clientRow } = await supabase
-        .from("clients").select("status_by_month").eq("id", clientId).maybeSingle();
-
-      const statusByMonth = { ...(clientRow?.status_by_month ?? {}) };
-      const current = statusByMonth[monthKey] ?? { status: "PENDING" };
-      // Dentro do mês vale o maior dia (remarcação para a frente ganha).
-      if (!current.customDate || dayOfMonth >= current.customDate) {
-        statusByMonth[monthKey] = { ...current, customDate: dayOfMonth };
-        await supabase.from("clients").update({ status_by_month: statusByMonth }).eq("id", clientId);
-      }
+      await mirrorOnClient(supabase, clientId, day, { phone: phone || null, email });
     }
 
     if (link) {
@@ -825,28 +902,14 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // Evento no Google + link do Meet. Falha aqui não desfaz o agendamento.
-    const meet = await createMeetEvent(supabase, {
-      startsAt, endsAt, name: name || "Cliente", email
-    });
-
-    await supabase.from("appointments").update({
-      meet_url: meet.meetUrl ?? null,
-      google_event_id: meet.eventId ?? null,
-      meet_attempts: 1,
-      meet_error: meet.error ?? null
-    }).eq("id", created.id);
-
-    // Confirmação por e-mail. Vai depois do Meet de propósito, para a
-    // mensagem já poder levar o link da videochamada.
-    await sendConfirmation(supabase, {
+    const { meetUrl } = await attachMeetAndConfirm(supabase, {
       appointmentId: created.id,
-      name: name || "Cliente",
-      phone,
-      email,
       startsAt,
-      manageToken,
-      meetUrl: meet.meetUrl ?? null
+      endsAt,
+      name: name || "Cliente",
+      phone: phone || null,
+      email,
+      manageToken
     });
 
     /**
@@ -867,7 +930,92 @@ Deno.serve(async (req: Request) => {
       ok: true,
       appointmentId: created.id,
       manageToken,
-      meetUrl: meet.meetUrl ?? null
+      meetUrl
+    });
+  }
+
+  // -------------------------------------------------------- admin_create
+  if (action === "admin_create") {
+    /**
+     * Marcar pelo painel, em nome de um cliente cadastrado.
+     *
+     * Era o que o eAgenda fazia e o sistema novo não tinha: clicar num
+     * horário, escolher o cliente e pronto — ele recebe a confirmação como
+     * se tivesse marcado sozinho. Sem isso, a única saída era mandar o link
+     * e esperar o cliente escolher.
+     *
+     * Diferenças para o agendamento do cliente, todas de propósito:
+     *  - a sessão é conferida no Supabase (não basta dizer que é admin);
+     *  - sem antecedência mínima nem limite de dias: quem administra a
+     *    agenda pode encaixar alguém amanhã cedo;
+     *  - não cancela reunião anterior do cliente — o painel avisa antes, e
+     *    quem decide é quem está marcando;
+     *  - não manda notificação para o celular: quem marcou já sabe.
+     */
+    const accessToken: string = payload?.accessToken ?? "";
+    if (!accessToken) return json({ ok: false, error: "unauthorized" }, 401);
+    const { data: userData } = await supabase.auth.getUser(accessToken);
+    if (!userData?.user) return json({ ok: false, error: "unauthorized" }, 401);
+
+    const requestedClientId: string = payload?.clientId ?? "";
+    const day: string = payload?.day ?? "";
+    const time: string = payload?.time ?? "";
+    if (!requestedClientId || !/^\d{4}-\d{2}-\d{2}$/.test(day) || !/^\d{2}:\d{2}$/.test(time)) {
+      return json({ ok: false, error: "missing_slot" }, 400);
+    }
+
+    const { data: clientRow } = await supabase
+      .from("clients").select("id, name, phone_digits, email").eq("id", requestedClientId).maybeSingle();
+    if (!clientRow) return json({ ok: false, error: "not_found" }, 404);
+
+    const config = await loadConfig();
+    const startsAt = zonedToInstant(day, time);
+    const endsAt = new Date(startsAt.getTime() + config.settings.slot_duration_minutes * 60000);
+    if (startsAt.getTime() <= now.getTime()) return json({ ok: false, error: "slot_in_past" }, 409);
+
+    // As duas agendas: horário tomado no eAgenda também não pode.
+    const taken = await takenInstants(startsAt.toISOString(), startsAt.toISOString());
+    if (taken.has(startsAt.getTime())) return json({ ok: false, error: "slot_taken" }, 409);
+
+    const name = cleanText(clientRow.name) || "Cliente";
+    const email = cleanText(clientRow.email) || null;
+    const phone = normalizePhone(clientRow.phone_digits ?? "") || null;
+    const manageToken = newToken();
+
+    const { data: created, error } = await supabase
+      .from("appointments")
+      .insert({
+        client_id: clientRow.id,
+        starts_at: startsAt.toISOString(),
+        ends_at: endsAt.toISOString(),
+        attendee_name: name,
+        attendee_email: email,
+        attendee_phone: phone,
+        status: "CONFIRMED",
+        manage_token: manageToken,
+        source: "manual"
+      })
+      .select("id")
+      .single();
+
+    if (error) {
+      const duplicated = (error as any).code === "23505";
+      return json({ ok: false, error: duplicated ? "slot_taken" : "insert_failed" }, duplicated ? 409 : 500);
+    }
+
+    await mirrorOnClient(supabase, clientRow.id, day, { phone, email });
+
+    const { meetUrl, confirmation } = await attachMeetAndConfirm(supabase, {
+      appointmentId: created.id, startsAt, endsAt, name, phone, email, manageToken
+    });
+
+    return json({
+      ok: true,
+      appointmentId: created.id,
+      meetUrl,
+      emailSent: confirmation.ok,
+      emailTo: email,
+      emailDetail: confirmation.detail
     });
   }
 

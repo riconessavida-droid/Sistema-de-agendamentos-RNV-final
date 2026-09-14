@@ -381,3 +381,132 @@ export const importEagendaBlocks = async (): Promise<{ imported: number; error?:
   if (insertError) return { imported: 0, error: insertError.message };
   return { imported: rows.length };
 };
+
+export type AdminBookingResult = {
+  error?: string;
+  emailSent?: boolean;
+  emailTo?: string | null;
+  meetUrl?: string | null;
+};
+
+const ADMIN_BOOKING_ERRORS: Record<string, string> = {
+  unauthorized: 'Sessão expirada. Entre de novo para agendar.',
+  slot_taken: 'Esse horário acabou de ser ocupado. Atualize a agenda e escolha outro.',
+  slot_in_past: 'Esse horário já passou.',
+  not_found: 'Cliente não encontrado.',
+  missing_slot: 'Escolha um cliente e um horário.'
+};
+
+/**
+ * Agenda pelo painel em nome de um cliente cadastrado.
+ *
+ * Mesma porta do cancelamento: a Edge Function, com a sessão junto. Marcar
+ * não é só gravar uma linha — tem o evento no Google, o link do Meet e o
+ * e-mail de confirmação, e tudo isso já mora lá.
+ */
+export const adminCreateAppointment = async (
+  clientId: string,
+  day: DayKey,
+  time: string
+): Promise<AdminBookingResult> => {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const accessToken = sessionData?.session?.access_token;
+  if (!accessToken) return { error: ADMIN_BOOKING_ERRORS.unauthorized };
+
+  const { data, error } = await supabase.functions.invoke('booking', {
+    body: { action: 'admin_create', clientId, day, time, accessToken }
+  });
+
+  // Resposta 4xx chega como `error`, com o motivo dentro do corpo.
+  if (error) {
+    let code: string | undefined;
+    try {
+      code = (await (error as any).context?.json())?.error;
+    } catch {
+      /* resposta sem corpo */
+    }
+    return { error: (code && ADMIN_BOOKING_ERRORS[code]) || code || error.message };
+  }
+  if (data && data.ok === false) {
+    return { error: ADMIN_BOOKING_ERRORS[data.error] ?? data.error ?? 'Não consegui agendar.' };
+  }
+  return {
+    emailSent: Boolean(data?.emailSent),
+    emailTo: data?.emailTo ?? null,
+    meetUrl: data?.meetUrl ?? null
+  };
+};
+
+export type HistoryEntry = {
+  key: string;
+  startsAt: string;
+  clientId: string | null;
+  attendeeName: string | null;
+  /** sistema = link do cliente · agenda = marcado pelo painel · eagenda */
+  origin: 'sistema' | 'agenda' | 'eagenda';
+  canceled: boolean;
+  /** Só existe para o nosso sistema — é o que abre o detalhe da reunião. */
+  appointment: Appointment | null;
+};
+
+/**
+ * Agendamentos de pouco mais de um ano para trás, e os futuros, das duas
+ * agendas — a base da busca por cliente.
+ *
+ * Vem inteiro e o filtro é feito na tela: uns 65 clientes com uma reunião
+ * por mês dão poucas centenas de linhas por ano, e filtrar no navegador
+ * deixa a busca ignorar acento ("Thais" acha "Thaís"), coisa que o filtro
+ * do banco não faz.
+ */
+export const loadBookingHistory = async (): Promise<HistoryEntry[]> => {
+  const since = new Date(Date.now() - 400 * 24 * 60 * 60 * 1000).toISOString();
+
+  const [ownRes, eagendaRes] = await Promise.all([
+    supabase
+      .from('appointments')
+      .select('*')
+      .gte('starts_at', since)
+      .order('starts_at')
+      .limit(3000),
+    supabase
+      .from('eagenda_bookings')
+      .select('appointment_key, attendee_name, start_datetime, event_status, matched_client_id')
+      .gte('start_datetime', since)
+      .order('start_datetime')
+      .limit(3000)
+  ]);
+
+  const own = (ownRes.data ?? []).map((row: any): HistoryEntry => {
+    const appointment = dbToAppointment(row);
+    return {
+      key: `s-${appointment.id}`,
+      startsAt: appointment.startsAt,
+      clientId: appointment.clientId,
+      attendeeName: appointment.attendeeName,
+      origin: appointment.source === 'manual' ? 'agenda' : 'sistema',
+      canceled: appointment.status === 'CANCELED',
+      appointment
+    };
+  });
+
+  // O mesmo horário nas duas tabelas é a mesma reunião: fica a nossa.
+  const ownInstants = new Set(
+    own.filter(entry => !entry.canceled).map(entry => new Date(entry.startsAt).getTime())
+  );
+
+  const eagenda = (eagendaRes.data ?? [])
+    .filter((row: any) => !ownInstants.has(new Date(row.start_datetime).getTime()))
+    .map((row: any): HistoryEntry => ({
+      key: `e-${row.appointment_key}`,
+      startsAt: row.start_datetime,
+      clientId: row.matched_client_id ?? null,
+      attendeeName: row.attendee_name ?? null,
+      origin: 'eagenda',
+      canceled: ['CANCELED', 'NO_SHOW'].includes(String(row.event_status ?? '').toUpperCase()),
+      appointment: null
+    }));
+
+  return [...own, ...eagenda].sort(
+    (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()
+  );
+};

@@ -18,6 +18,8 @@ import { BlocksPanel } from './BlocksPanel';
 import { AppointmentDetail } from './AppointmentDetail';
 import { LinksPanel } from './LinksPanel';
 import { GooglePanel } from './GooglePanel';
+import { BookSlotModal } from './BookSlotModal';
+import { ClientHistorySearch } from './ClientHistorySearch';
 
 type SubTab = 'week' | 'day' | 'links' | 'hours' | 'blocks' | 'google';
 
@@ -57,6 +59,7 @@ export function SchedulingTab({ clients, role, initialDay }: SchedulingTabProps)
   const [data, setData] = useState<SchedulingData>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Appointment | null>(null);
+  const [bookingSlot, setBookingSlot] = useState<{ day: DayKey; time: string } | null>(null);
 
   // Só o Eduardo mexe na grade; a assistente vê tudo e pode bloquear.
   const canEditGrid = role === UserRole.ADMIN;
@@ -190,6 +193,14 @@ export function SchedulingTab({ clients, role, initialDay }: SchedulingTabProps)
         </button>
       </div>
 
+      {/* Acima das abas para servir tanto à semana quanto à lista do dia. */}
+      <ClientHistorySearch
+        clients={clients}
+        now={now}
+        version={data}
+        onSelectAppointment={setSelected}
+      />
+
       <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-semibold w-fit">
         {SUB_TABS.map(tab => (
           <button
@@ -214,6 +225,7 @@ export function SchedulingTab({ clients, role, initialDay }: SchedulingTabProps)
           onSelectAppointment={setSelected}
           onBlockSlot={handleBlockSlot}
           onUnblockSlot={handleUnblockSlot}
+          onBookSlot={(day, time) => setBookingSlot({ day, time })}
         />
       )}
 
@@ -323,6 +335,18 @@ export function SchedulingTab({ clients, role, initialDay }: SchedulingTabProps)
           now={now}
           onClose={() => setSelected(null)}
           onCancel={handleCancelAppointment}
+        />
+      )}
+
+      {bookingSlot && (
+        <BookSlotModal
+          day={bookingSlot.day}
+          time={bookingSlot.time}
+          clients={clients}
+          appointments={data.appointments}
+          now={now}
+          onClose={() => setBookingSlot(null)}
+          onBooked={reload}
         />
       )}
     </div>

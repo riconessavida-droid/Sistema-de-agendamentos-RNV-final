@@ -117,6 +117,27 @@ const nameScore = (eagendaName: string, clientName: string): number => {
   return overlap * 15;
 };
 
+/**
+ * Marca, dentro da lista de "Conciliar", o que é agendamento do NOSSO
+ * sistema. A lista nasceu para o eAgenda e usa o formato dele; o prefixo
+ * deixa as duas fontes conviverem na mesma lista e no mesmo botão.
+ */
+const OWN_KEY_PREFIX = 'sistema:';
+
+/** "(34) 99670-5992" — o mesmo jeito que a ficha mostra quando é digitada à mão. */
+const formatPhoneBr = (raw: string): string => {
+  let d = (raw ?? '').replace(/\D/g, '');
+  if (d.length > 11 && d.startsWith('55')) d = d.slice(2);
+  d = d.slice(-11);
+  if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+  if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return d;
+};
+
+/** "2026-09-15" no fuso de São Paulo, qualquer que seja o do navegador. */
+const dayInSaoPaulo = (iso: string): string =>
+  new Date(iso).toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+
 const toMonthKey = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 
@@ -265,6 +286,7 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
    */
   const [ownAppointments, setOwnAppointments] = useState<Array<{
     id: string; clientId: string | null; attendeeName: string | null; startsAt: string;
+    attendeeEmail: string | null; attendeePhone: string | null;
   }>>([]);
 
   const loadOwnAppointments = async () => {
@@ -283,7 +305,7 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
      */
     const { data, error } = await supabase
       .from('appointments')
-      .select('id, client_id, attendee_name, starts_at')
+      .select('id, client_id, attendee_name, attendee_email, attendee_phone, starts_at')
       .eq('status', 'CONFIRMED')
       .order('starts_at', { ascending: false })
       .limit(500);
@@ -292,6 +314,8 @@ const [billingPaymentStatus, setBillingPaymentStatus] = useState<Record<string, 
         id: r.id,
         clientId: r.client_id ?? null,
         attendeeName: r.attendee_name ?? null,
+        attendeeEmail: r.attendee_email ?? null,
+        attendeePhone: r.attendee_phone ?? null,
         startsAt: r.starts_at
       })));
     }
@@ -973,11 +997,15 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
   const conciliationStats = useMemo(() => {
     // conta só clientes ATIVOS conciliados (evita passar de 'total' e dar negativo)
     const activeIds = new Set(activeClients.map(c => c.id));
-    const done = new Set(
-      boardBookings.filter(b => b.matchedClientId && activeIds.has(b.matchedClientId)).map(b => b.matchedClientId)
-    ).size;
+    // As duas agendas contam: quem agendou pelo nosso link também está
+    // conciliado. Contando só o eAgenda, o número de cima e a lista de
+    // baixo discordavam.
+    const done = new Set([
+      ...boardBookings.filter(b => b.matchedClientId && activeIds.has(b.matchedClientId)).map(b => b.matchedClientId),
+      ...ownAppointments.filter(a => a.clientId && activeIds.has(a.clientId)).map(a => a.clientId)
+    ]).size;
     return { done, total: activeClients.length, pending: Math.max(0, activeClients.length - done) };
-  }, [activeClients, boardBookings]);
+  }, [activeClients, boardBookings, ownAppointments]);
 
   // Detecta clientes duplicados: mesmo telefone (quase certo) ou mesmo 1º+2º nome
   // (conferir). Agrupa para o admin apagar o registro errado.
@@ -1030,19 +1058,131 @@ const addClient = async (data: Omit<Client, 'id' | 'statusByMonth' | 'groupColor
       if (!cur || b.startDateTime > cur.startDateTime) porPessoa.set(chave, b);
     });
 
-    return Array.from(porPessoa.values())
-      .sort((a, b) => b.startDateTime.localeCompare(a.startDateTime));
-  }, [boardBookings, activeClients]);
+    /**
+     * Agendamentos do NOSSO sistema que ficaram sem dono.
+     *
+     * Era aqui que a Conciliação travava. Quem marca pelo link geral antes
+     * de ter ficha — agenda primeiro, assina o contrato depois — fica com o
+     * agendamento sem cliente. A ficha só nasce na assinatura, e nada
+     * voltava para amarrar os dois. Como esta lista só oferecia o eAgenda,
+     * o agendamento nunca aparecia para escolher, por mais que se
+     * atualizasse a tela: estava procurando no lugar errado.
+     *
+     * Entra também o que ficou preso numa ficha que não está mais ativa
+     * (duplicata apagada, contrato encerrado), igual ao eAgenda acima.
+     */
+    const proprios = new Map<string, EagendaBooking>();
+    ownAppointments
+      .filter(a => !a.clientId || !activeIds.has(a.clientId))
+      .forEach(a => {
+        const chave = normalizeName(a.attendeeName ?? '') || a.id;
+        // a lista vem da mais recente para a mais antiga: fica a primeira
+        if (proprios.has(chave)) return;
+        const dia = dayInSaoPaulo(a.startsAt);
+        proprios.set(chave, {
+          appointmentKey: `${OWN_KEY_PREFIX}${a.id}`,
+          personKey: null,
+          attendeeName: a.attendeeName,
+          attendeeEmail: a.attendeeEmail,
+          startDateTime: a.startsAt,
+          monthKey: dia.slice(0, 7),
+          dayOfMonth: Number(dia.slice(8, 10)),
+          eventStatus: 'CONFIRMED',
+          conciliationStatus: 'PENDING',
+          matchedClientId: a.clientId,
+          createdAt: a.startsAt
+        });
+      });
+
+    return [...porPessoa.values(), ...proprios.values()]
+      .sort((a, b) => new Date(b.startDateTime).getTime() - new Date(a.startDateTime).getTime());
+  }, [boardBookings, activeClients, ownAppointments]);
 
   // Ordena os candidatos por semelhança de nome com o cliente (melhor sugestão 1º).
   const candidatesFor = (client: Client) =>
     [...candidates].sort((a, b) => nameScore(client.name, b.attendeeName ?? '') - nameScore(client.name, a.attendeeName ?? ''));
+
+  /**
+   * Vincula agendamento do NOSSO sistema a um cliente.
+   *
+   * Três coisas de uma vez:
+   *  1. o agendamento — e os outros sem dono da mesma pessoa — ganha o cliente;
+   *  2. a data vai para a ficha, como se tivesse agendado pelo link pessoal;
+   *  3. telefone e e-mail digitados no agendamento completam a ficha, se ela
+   *     não tiver. É o que conserta as fichas criadas pelo contrato, que
+   *     nascem sem telefone.
+   *
+   * A ficha é gravada UMA vez, com tudo junto. Chamar updateMeetingData mês
+   * a mês dentro do laço perderia datas: cada chamada parte da ficha como
+   * estava antes do laço e apaga o que a anterior escreveu.
+   */
+  const concileOwnAppointment = async (client: Client, chosen: EagendaBooking) => {
+    const chosenId = chosen.appointmentKey.slice(OWN_KEY_PREFIX.length);
+    const escolhido = ownAppointments.find(a => a.id === chosenId);
+    if (!escolhido) return;
+
+    const activeIds = new Set(activeClients.map(c => c.id));
+    const pessoa = normalizeName(escolhido.attendeeName ?? '');
+    const grupo = ownAppointments.filter(a =>
+      (!a.clientId || !activeIds.has(a.clientId)) &&
+      (a.id === escolhido.id || (pessoa !== '' && normalizeName(a.attendeeName ?? '') === pessoa))
+    );
+
+    setProcessingBooking(chosen.appointmentKey);
+    try {
+      const { error: linkError } = await supabase
+        .from('appointments')
+        .update({ client_id: client.id })
+        .in('id', grupo.map(a => a.id));
+      if (linkError) throw linkError;
+
+      const statusByMonth = { ...client.statusByMonth };
+      for (const a of grupo) {
+        const dia = dayInSaoPaulo(a.startsAt);
+        const mes = dia.slice(0, 7);
+        const diaDoMes = Number(dia.slice(8, 10));
+        const atual = statusByMonth[mes] ?? { status: MeetingStatus.PENDING };
+        if (!atual.customDate || diaDoMes >= atual.customDate) {
+          statusByMonth[mes] = { ...atual, customDate: diaDoMes };
+        }
+      }
+
+      const telefone = grupo.map(a => a.attendeePhone ?? '').find(p => p.replace(/\D/g, '').length >= 10);
+      const email = grupo.map(a => (a.attendeeEmail ?? '').trim()).find(e => e.includes('@'));
+      const semTelefone = (client.phoneDigits ?? '').replace(/\D/g, '').length < 10;
+
+      const patch: Record<string, unknown> = { status_by_month: statusByMonth };
+      if (semTelefone && telefone) patch.phone_digits = formatPhoneBr(telefone);
+      if (!client.email && email) patch.email = email;
+
+      const { error: clientError } = await supabase.from('clients').update(patch).eq('id', client.id);
+      if (clientError) throw clientError;
+
+      setClients(prev => prev.map(c => c.id === client.id ? {
+        ...c,
+        statusByMonth,
+        phoneDigits: (patch.phone_digits as string | undefined) ?? c.phoneDigits,
+        email: (patch.email as string | undefined) ?? c.email
+      } : c));
+
+      setManualClientId(null);
+      await loadOwnAppointments();
+    } catch (e: any) {
+      alert(`Erro ao conciliar: ${e?.message ?? e}`);
+    } finally {
+      setProcessingBooking(null);
+    }
+  };
 
   // Concilia manualmente um cliente "sem agendamento" com um agendamento do
   // eAgenda escolhido. Vincula também os outros agendamentos da mesma pessoa.
   const manualConcile = async (client: Client, appointmentKey: string) => {
     const chosen = candidates.find(c => c.appointmentKey === appointmentKey);
     if (!chosen) return;
+    if (appointmentKey.startsWith(OWN_KEY_PREFIX)) {
+      await concileOwnAppointment(client, chosen);
+      return;
+    }
     setProcessingBooking(appointmentKey);
     try {
       // agrupa todos os agendamentos da mesma pessoa (se tiver person_key)
@@ -3189,7 +3329,7 @@ const billingData = useMemo(() => {
             <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
               <div className="grid grid-cols-2 bg-slate-50 border-b border-slate-200 text-[11px] font-black uppercase tracking-widest text-slate-500">
                 <div className="px-4 py-3 border-r border-slate-200 bg-yellow-50">Sistema ({conciliationStats.total} ativos)</div>
-                <div className="px-4 py-3">eAgenda</div>
+                <div className="px-4 py-3">Agendamento</div>
               </div>
 
               {loadingBoard && boardBookings.length === 0 ? (
@@ -3284,7 +3424,7 @@ const billingData = useMemo(() => {
                             return (
                               <div className="mt-2">
                                 {todos.length === 0 ? (
-                                  <p className="text-xs text-slate-400">Nenhum agendamento futuro sem dono para sugerir.</p>
+                                  <p className="text-xs text-slate-400">Nenhum agendamento sem dono para sugerir — nem no nosso link, nem no eAgenda.</p>
                                 ) : (
                                   <div className="space-y-2">
                                     <input
@@ -3308,6 +3448,9 @@ const billingData = useMemo(() => {
                                         >
                                           {i === 0 && !termo ? '⭐ ' : ''}{c.attendeeName ?? 'Sem nome'}
                                           <span className="text-slate-400"> · {String(c.dayOfMonth).padStart(2, '0')}/{c.monthKey.split('-')[1]}</span>
+                                          <span className={`ml-1.5 text-[9px] font-black uppercase tracking-wider ${c.appointmentKey.startsWith(OWN_KEY_PREFIX) ? 'text-emerald-600' : 'text-slate-300'}`}>
+                                            {c.appointmentKey.startsWith(OWN_KEY_PREFIX) ? 'nosso link' : 'eAgenda'}
+                                          </span>
                                         </button>
                                       ))}
                                     </div>

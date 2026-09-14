@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, FileSignature, Lock, Video, X } from 'lucide-react';
 import { offGridAppointments, slotStates } from './availability';
 import { holidaysBetween } from './holidays';
-import { DayKey, addDays, toDayKey, toTimeKey, weekdayOf } from './timezone';
+import { DayKey, addDays, toDayKey, toTimeKey, weekdayOf, zonedToInstant } from './timezone';
 import { Appointment, SlotState } from './types';
 import { SchedulingData } from './db';
 
@@ -26,6 +26,8 @@ interface WeekCalendarProps {
   onBlockSlot?: (day: DayKey, time: string) => Promise<void> | void;
   /** Desfaz um bloqueio manual criado por aqui. */
   onUnblockSlot?: (blockId: number) => Promise<void> | void;
+  /** Abre o agendamento de um cliente cadastrado naquele horário. */
+  onBookSlot?: (day: DayKey, time: string) => void;
 }
 
 type Entry = {
@@ -61,7 +63,8 @@ export function WeekCalendar({
   onNavigate,
   onSelectAppointment,
   onBlockSlot,
-  onUnblockSlot
+  onUnblockSlot,
+  onBookSlot
 }: WeekCalendarProps) {
   const weekStart = startOfWeek(anchorDay);
   const weekEnd = addDays(weekStart, 6);
@@ -152,14 +155,29 @@ export function WeekCalendar({
   const entryAt = (day: DayKey, time: string): Entry | undefined =>
     (byDay.get(day) ?? []).find(e => e.time === time);
 
-  /** Só horário livre ou bloqueado por nós abre o pop-up. */
+  /**
+   * Horário fora do prazo do CLIENTE, mas ainda no futuro.
+   *
+   * A antecedência mínima e o limite de dias existem para o cliente não
+   * marcar em cima da hora nem longe demais. Quem administra a agenda pode:
+   * encaixar alguém amanhã cedo é justamente o tipo de coisa que se faz
+   * pelo painel. Esses horários não se bloqueiam (o cliente já não os vê),
+   * só se agendam.
+   */
+  const bookableOutsideWindow = (day: DayKey, entry: Entry): boolean =>
+    Boolean(onBookSlot) &&
+    (entry.state === 'too_soon' || entry.state === 'too_far') &&
+    zonedToInstant(day, entry.time).getTime() > now.getTime();
+
+  /** Livre e bloqueado por nós abrem o pop-up; fora do prazo vai direto para agendar. */
   const handleClick = (day: DayKey, entry: Entry) => {
     if (entry.appointment) {
       onSelectAppointment(entry.appointment);
       return;
     }
-    if (entry.state === 'free' && onBlockSlot) setAction({ day, entry });
+    if (entry.state === 'free' && (onBlockSlot || onBookSlot)) setAction({ day, entry });
     else if (entry.state === 'blocked' && entry.blockId && onUnblockSlot) setAction({ day, entry });
+    else if (bookableOutsideWindow(day, entry)) onBookSlot?.(day, entry.time);
   };
 
   const confirmAction = async () => {
@@ -211,7 +229,7 @@ export function WeekCalendar({
 
       {onBlockSlot && (
         <p className="px-4 py-2 text-[11px] text-slate-500 bg-slate-50/60 border-b border-slate-100">
-          Clique num horário <b>livre</b> para bloquear, ou num <b>bloqueado</b> para liberar.
+          Clique num horário <b>livre</b> para agendar um cliente ou bloquear, e num <b>bloqueado</b> para liberar.
         </p>
       )}
 
@@ -303,10 +321,12 @@ export function WeekCalendar({
                     : undefined;
                   const name = client?.name ?? entry.appointment?.attendeeName ?? '';
                   const pendingContract = client ? !client.contractSigned : false;
+                  const outside = bookableOutsideWindow(day, entry);
                   const clickable =
                     Boolean(entry.appointment) ||
-                    (entry.state === 'free' && Boolean(onBlockSlot)) ||
-                    (entry.state === 'blocked' && entry.blockId != null && Boolean(onUnblockSlot));
+                    (entry.state === 'free' && Boolean(onBlockSlot || onBookSlot)) ||
+                    (entry.state === 'blocked' && entry.blockId != null && Boolean(onUnblockSlot)) ||
+                    outside;
 
                   return (
                     <td
@@ -318,15 +338,19 @@ export function WeekCalendar({
                         disabled={!clickable}
                         className={`w-full h-[44px] overflow-hidden text-left px-2 py-1 rounded-md text-[11px] font-bold leading-tight transition-colors ${
                           STATE_STYLE[entry.state]
-                        } ${clickable ? '' : 'cursor-default'}`}
+                        } ${clickable ? '' : 'cursor-default'} ${
+                          outside ? 'cursor-pointer hover:border-emerald-400 hover:text-emerald-600' : ''
+                        }`}
                         title={
                           entry.state === 'off_grid'
                             ? 'Reunião fora da grade atual (a grade mudou depois, ou foi um encaixe)'
                             : entry.state === 'blocked'
                               ? entry.blockReason ?? 'Horário bloqueado'
                               : entry.state === 'free'
-                                ? 'Livre — clique para bloquear'
-                                : undefined
+                                ? 'Livre — clique para agendar ou bloquear'
+                                : outside
+                                  ? 'Fora do prazo do cliente — clique para agendar mesmo assim'
+                                  : undefined
                         }
                       >
                         <span className="flex items-center gap-1">
@@ -363,7 +387,7 @@ export function WeekCalendar({
           >
             <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
               <h4 className="text-sm font-black uppercase tracking-widest text-slate-600">
-                {action.entry.state === 'free' ? 'Bloquear horário' : 'Liberar horário'}
+                {action.entry.state === 'free' ? 'Horário livre' : 'Liberar horário'}
               </h4>
               <button
                 onClick={() => setAction(null)}
@@ -378,9 +402,9 @@ export function WeekCalendar({
               <p className="text-sm text-slate-600 leading-relaxed">
                 {action.entry.state === 'free' ? (
                   <>
-                    Bloquear <b>{action.day.slice(8)}/{action.day.slice(5, 7)}</b> às{' '}
-                    <b>{action.entry.time}</b>? O horário some das opções do cliente
-                    na hora.
+                    <b>{action.day.slice(8)}/{action.day.slice(5, 7)}</b> às{' '}
+                    <b>{action.entry.time}</b>. Agende um cliente cadastrado — ele recebe
+                    a confirmação por e-mail — ou bloqueie para ninguém marcar.
                   </>
                 ) : (
                   <>
@@ -389,10 +413,12 @@ export function WeekCalendar({
                   </>
                 )}
               </p>
-              <p className="mt-3 text-[11px] text-slate-400 leading-relaxed">
-                Reunião já marcada não é afetada — isto só muda o que o cliente
-                pode escolher daqui pra frente.
-              </p>
+              {action.entry.state !== 'free' && (
+                <p className="mt-3 text-[11px] text-slate-400 leading-relaxed">
+                  Reunião já marcada não é afetada — isto só muda o que o cliente
+                  pode escolher daqui pra frente.
+                </p>
+              )}
             </div>
 
             <div className="px-5 py-4 bg-slate-50 flex gap-2 justify-end">
@@ -418,6 +444,19 @@ export function WeekCalendar({
                     ? 'Bloquear'
                     : 'Liberar'}
               </button>
+              {action.entry.state === 'free' && onBookSlot && (
+                <button
+                  onClick={() => {
+                    const { day, entry } = action;
+                    setAction(null);
+                    onBookSlot(day, entry.time);
+                  }}
+                  disabled={saving}
+                  className="px-4 py-2 rounded-lg text-xs font-black text-white bg-emerald-600 hover:bg-emerald-700 transition-colors disabled:opacity-50"
+                >
+                  Agendar cliente
+                </button>
+              )}
             </div>
           </div>
         </div>

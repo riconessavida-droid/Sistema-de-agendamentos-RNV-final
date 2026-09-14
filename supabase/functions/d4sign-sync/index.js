@@ -93,6 +93,22 @@ function firstTwoNames(s) {
 function onlyDigits(s) {
   return (s ?? "").replace(/\D/g, "");
 }
+// Telefone brasileiro só com DDD + número; vazio se não chega a 10 dígitos.
+function normalizePhone(s) {
+  let d = onlyDigits(s);
+  if (d.length > 11 && d.startsWith("55")) d = d.slice(2);
+  return d.length >= 10 ? d.slice(-11) : "";
+}
+// "(34) 99670-5992" — o mesmo jeito que a ficha mostra quando é digitada à mão.
+function formatPhoneBr(s) {
+  const d = normalizePhone(s);
+  if (d.length === 11) return "(" + d.slice(0, 2) + ") " + d.slice(2, 7) + "-" + d.slice(7);
+  if (d.length === 10) return "(" + d.slice(0, 2) + ") " + d.slice(2, 6) + "-" + d.slice(6);
+  return d;
+}
+// "2026-09-15" no fuso de São Paulo.
+const diaEmSaoPaulo = (iso) =>
+  new Date(iso).toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
 function normalizeEmail(s) {
   return (s ?? "").trim().toLowerCase();
 }
@@ -585,11 +601,34 @@ Deno.serve(async (req) => {
 
     // ---------------------------------------------- clientes (1 leitura)
     const { data: allClients } = await supabase
-      .from("clients").select("id, name, email, cpf, phone_digits, status_by_month");
+      .from("clients").select("id, name, email, cpf, phone_digits, status_by_month, contract_doc_uuid");
     const clients = allClients ?? [];
     const activeClients = clients.filter(
       (c) => !Object.values(c.status_by_month ?? {}).some((s) => INACTIVE_STATUSES.has(s?.status))
     );
+
+    // Agendamentos com e-mail digitado — a ponte entre o contrato (que traz
+    // e-mail, mas não telefone) e a ficha (que costuma ter telefone, mas
+    // não e-mail). Leitura do nosso banco: não gasta requisição do D4Sign.
+    const { data: agendamentosComEmail } = await supabase
+      .from("appointments")
+      .select("id, client_id, attendee_email, attendee_phone, starts_at")
+      .eq("status", "CONFIRMED")
+      .not("attendee_email", "is", null)
+      .order("starts_at", { ascending: false })
+      .limit(1000);
+    const appointmentsByEmail = new Map();
+    for (const a of agendamentosComEmail ?? []) {
+      const key = normalizeEmail(a.attendee_email);
+      if (!key) continue;
+      if (!appointmentsByEmail.has(key)) appointmentsByEmail.set(key, []);
+      appointmentsByEmail.get(key).push(a);
+    }
+    const telefoneDoAgendamento = (email) => {
+      const achado = (appointmentsByEmail.get(email) ?? [])
+        .map((a) => normalizePhone(a.attendee_phone)).find(Boolean);
+      return achado ? formatPhoneBr(achado) : "";
+    };
 
     const ownerEmails = new Set(
       (Deno.env.get("D4SIGN_OWNER_EMAILS") ?? DEFAULT_OWNER_EMAILS.join(","))
@@ -776,6 +815,53 @@ Deno.serve(async (req) => {
         }
       }
 
+      /**
+       * Duas tentativas a mais antes de criar ficha nova.
+       *
+       * Sem elas o sistema duplicava cliente. A Stephanie foi o caso: a ficha
+       * foi cadastrada à mão como "STEPHANIE", com telefone, e o contrato
+       * chegou como "Stephanie Pedrosa de Oliveira", com e-mail e CPF.
+       * Nenhuma regra acima liga os dois — não há CPF nem e-mail na ficha, e
+       * "stephanie" não é igual a "stephanie pedrosa" — então nascia uma
+       * segunda Stephanie, sem telefone.
+       *
+       * O match_method gravado reaproveita "email" e "name": a tabela
+       * d4sign_documents só aceita esses valores, e um valor novo faria o
+       * registro do contrato falhar calado — e o aviso sair de novo na
+       * rodada seguinte.
+       */
+      const semContrato = (c) => !c.contract_doc_uuid && !onlyDigits(c.cpf ?? "");
+
+      // (a) o e-mail do contrato já foi digitado num agendamento: o
+      //     agendamento diz de quem é, ou pelo menos traz o telefone.
+      if (!clientId && signerEmail) {
+        const agendamentos = appointmentsByEmail.get(signerEmail) ?? [];
+        const donos = [...new Set(agendamentos.map((a) => a.client_id).filter(Boolean))]
+          .filter((id) => activeClients.some((c) => c.id === id));
+        if (donos.length === 1) {
+          clientId = donos[0]; matchMethod = "email";
+        } else if (donos.length === 0) {
+          const telefones = new Set(agendamentos.map((a) => normalizePhone(a.attendee_phone)).filter(Boolean));
+          const byPhone = activeClients.filter((c) => semContrato(c) && telefones.has(normalizePhone(c.phone_digits)));
+          if (byPhone.length === 1) { clientId = byPhone[0].id; matchMethod = "email"; }
+        }
+      }
+
+      // (b) nome curto: todas as palavras da ficha estão no nome do contrato,
+      //     começando pelo primeiro nome. Só vale para ficha que ainda não tem
+      //     contrato, e só com UM candidato — duas "Ana" sem contrato
+      //     continuam virando ficha nova, que é o erro mais fácil de desfazer.
+      if (!clientId && signerName) {
+        const palavrasContrato = normalizeName(signerName).split(" ").filter(Boolean);
+        const noContrato = new Set(palavrasContrato);
+        const byShortName = activeClients.filter((c) => {
+          const palavras = normalizeName(c.name ?? "").split(" ").filter(Boolean);
+          return semContrato(c) && palavras.length > 0 &&
+            palavras[0] === palavrasContrato[0] && palavras.every((w) => noContrato.has(w));
+        });
+        if (byShortName.length === 1) { clientId = byShortName[0].id; matchMethod = "name"; }
+      }
+
       // ------------------------------------------------------- o PDF
       let pdfUrl = null;
       try {
@@ -827,7 +913,7 @@ Deno.serve(async (req) => {
         const { error: insErr } = await supabase.from("clients").insert({
           id: newId,
           name: signerName || "(sem nome)",
-          phone_digits: "",                        // chega depois, pelo eAgenda
+          phone_digits: signerEmail ? telefoneDoAgendamento(signerEmail) : "", // o que foi digitado ao agendar, se houver
           start_month_year: monthKeyOf(signedAt),  // provisório: mês da assinatura
           start_date: dayOf(signedAt),
           sequence_in_month: 0,
@@ -865,6 +951,10 @@ Deno.serve(async (req) => {
         };
         if (!current.email && signerEmail) patch.email = signerEmail;
         if (!current.cpf && signerCpfDigits) patch.cpf = signerCpfDigits;
+        if (!normalizePhone(current.phone_digits) && signerEmail) {
+          const telefone = telefoneDoAgendamento(signerEmail);
+          if (telefone) patch.phone_digits = telefone;
+        }
 
         const { error: upErr } = await supabase.from("clients").update(patch).eq("id", clientId);
         if (upErr) {
@@ -878,6 +968,42 @@ Deno.serve(async (req) => {
           { email: signerEmail, client_id: clientId, linked_name: signerName },
           { onConflict: "email" }
         );
+      }
+
+      /**
+       * Agendamentos que esta pessoa fez ANTES de ter ficha passam a ser dela.
+       *
+       * É o caminho comum hoje: agenda pelo link geral, assina o contrato
+       * depois. Sem isto a reunião ficava sem dono — a ficha mostrava "sem
+       * agendamento" e a Conciliação não tinha como achar.
+       */
+      if (signerEmail && clientId) {
+        const semDono = (appointmentsByEmail.get(signerEmail) ?? []).filter((a) => !a.client_id);
+        if (semDono.length > 0) {
+          const { error: linkErr } = await supabase.from("appointments")
+            .update({ client_id: clientId })
+            .in("id", semDono.map((a) => a.id));
+
+          if (linkErr) {
+            report.errors.push({ uuid: doc.uuid, error: "link appointments: " + linkErr.message });
+          } else {
+            const { data: ficha } = await supabase
+              .from("clients").select("status_by_month").eq("id", clientId).maybeSingle();
+            const statusByMonth = { ...(ficha?.status_by_month ?? {}) };
+            for (const a of semDono) {
+              const dia = diaEmSaoPaulo(a.starts_at);
+              const mes = dia.slice(0, 7);
+              const diaDoMes = Number(dia.slice(8, 10));
+              const atual = statusByMonth[mes] ?? { status: "PENDING" };
+              if (!atual.customDate || diaDoMes >= atual.customDate) {
+                statusByMonth[mes] = { ...atual, customDate: diaDoMes };
+              }
+            }
+            await supabase.from("clients").update({ status_by_month: statusByMonth }).eq("id", clientId);
+            // Mantém a leitura desta rodada coerente com o que acabou de ser gravado.
+            for (const a of semDono) a.client_id = clientId;
+          }
+        }
       }
 
       await supabase.from("d4sign_documents").upsert({
