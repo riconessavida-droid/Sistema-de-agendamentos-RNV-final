@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, X } from 'lucide-react';
 import { Client } from '../types';
 import { HistoryEntry, loadBookingHistory } from './db';
@@ -64,7 +64,8 @@ export function ClientHistorySearch({
 }: ClientHistorySearchProps) {
   const [term, setTerm] = useState('');
   const [history, setHistory] = useState<HistoryEntry[] | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const requestRef = useRef(0);
 
   const target = normalize(term);
   const active = target.length >= MIN_CHARS;
@@ -74,21 +75,29 @@ export function ClientHistorySearch({
     setHistory(null);
   }, [version]);
 
+  /**
+   * Carrega uma vez e guarda; digitar mais letras só filtra o que já veio.
+   *
+   * A primeira versão tinha o "carregando" entre as dependências. Ligar o
+   * "carregando" fazia o efeito rodar de novo, a limpeza da rodada anterior
+   * marcava a busca como abandonada, e a resposta que chegava era jogada
+   * fora — a tela ficava em "Buscando..." para sempre.
+   *
+   * Agora cada pedido tem um número. Só a resposta do pedido mais recente
+   * é aproveitada, e nada no próprio carregamento dispara outro.
+   */
   useEffect(() => {
-    if (!active || history || loading) return;
-    let cancelled = false;
-    setLoading(true);
+    if (!active || history) return;
+    const request = ++requestRef.current;
+    setFailed(false);
     loadBookingHistory()
       .then(result => {
-        if (!cancelled) setHistory(result);
+        if (requestRef.current === request) setHistory(result);
       })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+      .catch(() => {
+        if (requestRef.current === request) setFailed(true);
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [active, history, loading]);
+  }, [active, history]);
 
   const clientNames = useMemo(() => {
     const map = new Map<string, string>();
@@ -132,8 +141,10 @@ export function ClientHistorySearch({
 
       {active && (
         <div className="border-t border-slate-100">
-          {loading && !history ? (
-            <p className="px-4 py-6 text-center text-sm text-slate-400">Buscando...</p>
+          {!history ? (
+            <p className="px-4 py-6 text-center text-sm text-slate-400">
+              {failed ? 'Não consegui carregar os agendamentos. Toque em Atualizar e tente de novo.' : 'Buscando...'}
+            </p>
           ) : results.length === 0 ? (
             <p className="px-4 py-6 text-center text-sm text-slate-400">
               Nenhum agendamento com esse nome no último ano.
