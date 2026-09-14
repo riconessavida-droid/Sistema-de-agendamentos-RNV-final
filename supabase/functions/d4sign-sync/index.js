@@ -816,24 +816,29 @@ Deno.serve(async (req) => {
       }
 
       /**
-       * Duas tentativas a mais antes de criar ficha nova.
+       * Uma tentativa a mais antes de criar ficha nova: o e-mail do contrato
+       * já digitado num agendamento.
        *
-       * Sem elas o sistema duplicava cliente. A Stephanie foi o caso: a ficha
-       * foi cadastrada à mão como "STEPHANIE", com telefone, e o contrato
-       * chegou como "Stephanie Pedrosa de Oliveira", com e-mail e CPF.
-       * Nenhuma regra acima liga os dois — não há CPF nem e-mail na ficha, e
-       * "stephanie" não é igual a "stephanie pedrosa" — então nascia uma
-       * segunda Stephanie, sem telefone.
+       * É prova de verdade — foi a própria pessoa que digitou o mesmo e-mail
+       * nos dois lugares.
        *
-       * O match_method gravado reaproveita "email" e "name": a tabela
-       * d4sign_documents só aceita esses valores, e um valor novo faria o
-       * registro do contrato falhar calado — e o aviso sair de novo na
-       * rodada seguinte.
+       * Existiu também uma regra só por nome ("STEPHANIE" contida em
+       * "Stephanie Pedrosa de Oliveira"), retirada no mesmo dia. A ficha
+       * "STEPHANIE" tinha o telefone do Maycow, DDD 34; a Stephanie do
+       * contrato digitou um celular DDD 31. Nome sozinho não separa duas
+       * pessoas com o mesmo primeiro nome, e errar ali é pior que duplicar:
+       * CPF e contrato gravados na ficha de outra pessoa, sem ninguém
+       * perceber. Duplicata aparece na tela e se apaga.
+       *
+       * O match_method gravado reaproveita "email": a tabela
+       * d4sign_documents só aceita link | cpf | email | name | created, e um
+       * valor novo faria o registro do contrato falhar calado — e o aviso
+       * sair de novo na rodada seguinte.
        */
       const semContrato = (c) => !c.contract_doc_uuid && !onlyDigits(c.cpf ?? "");
 
-      // (a) o e-mail do contrato já foi digitado num agendamento: o
-      //     agendamento diz de quem é, ou pelo menos traz o telefone.
+      // O agendamento diz de quem é, ou pelo menos traz o telefone digitado
+      // — e o telefone só vale se apontar para UMA ficha sem contrato.
       if (!clientId && signerEmail) {
         const agendamentos = appointmentsByEmail.get(signerEmail) ?? [];
         const donos = [...new Set(agendamentos.map((a) => a.client_id).filter(Boolean))]
@@ -847,20 +852,6 @@ Deno.serve(async (req) => {
         }
       }
 
-      // (b) nome curto: todas as palavras da ficha estão no nome do contrato,
-      //     começando pelo primeiro nome. Só vale para ficha que ainda não tem
-      //     contrato, e só com UM candidato — duas "Ana" sem contrato
-      //     continuam virando ficha nova, que é o erro mais fácil de desfazer.
-      if (!clientId && signerName) {
-        const palavrasContrato = normalizeName(signerName).split(" ").filter(Boolean);
-        const noContrato = new Set(palavrasContrato);
-        const byShortName = activeClients.filter((c) => {
-          const palavras = normalizeName(c.name ?? "").split(" ").filter(Boolean);
-          return semContrato(c) && palavras.length > 0 &&
-            palavras[0] === palavrasContrato[0] && palavras.every((w) => noContrato.has(w));
-        });
-        if (byShortName.length === 1) { clientId = byShortName[0].id; matchMethod = "name"; }
-      }
 
       // ------------------------------------------------------- o PDF
       let pdfUrl = null;
