@@ -327,8 +327,24 @@ Deno.serve(async (req) => {
     const now = new Date();
 
     // ------------------------------------------------------- o cofre
-    const { data: stored } = await supabase
+    /**
+     * Sem o estado, a rodada PARA — não tenta adivinhar.
+     *
+     * Em 14/09/2026 às 10h10 o sistema refez o inventário dos três cofres
+     * e marcou 659 documentos como "histórico". Um deles era o contrato do
+     * Patrese, assinado naquele fim de semana e ainda não processado: ficou
+     * ignorado e a ficha dele nunca nasceu.
+     *
+     * O caminho mais provável: esta leitura falhou uma vez. O erro era
+     * descartado, `stored` virava null, a lista de cofres parecia nunca ter
+     * sido descoberta, e a descoberta regravava os cofres SEM a marca de
+     * "já inventariado". É a mesma lição de 13/08 — estado de negócio não se
+     * deduz de ausência. Leitura que falha é erro, não "primeira vez".
+     */
+    const { data: stored, error: storedErr } = await supabase
       .from("d4sign_sync_state").select("*").eq("id", 1).maybeSingle();
+    if (storedErr) throw new Error("não consegui ler o estado do sync: " + storedErr.message);
+    if (!stored) throw new Error("linha do estado do sync (id=1) não existe — rode a migration 009");
 
     let safeUuid = cleanUrl(Deno.env.get("D4SIGN_SAFE_UUID")) || stored?.safe_uuid || null;
     let safeName = stored?.safe_name ?? null;
@@ -365,10 +381,15 @@ Deno.serve(async (req) => {
       const preferred =
         safes_.find((s) => normalizeName(safeNameOf(s)).includes("contrato")) ?? safes_[0];
 
-      safes = safes_.map((x) => ({
-        uuid: String(pickLoose(x, ["uuid-safe", "uuid", "uuidSafe", "safeUuid"]) ?? anyUuid(x) ?? ""),
-        name: safeNameOf(x),
-      })).filter((x) => x.uuid);
+      // Cofre que já foi inventariado continua inventariado, mesmo que a
+      // lista seja descoberta de novo.
+      const jaInventariados = new Set(
+        (Array.isArray(stored?.safes) ? stored.safes : []).filter((x) => x?.inventoried).map((x) => x.uuid)
+      );
+      safes = safes_.map((x) => {
+        const uuid = String(pickLoose(x, ["uuid-safe", "uuid", "uuidSafe", "safeUuid"]) ?? anyUuid(x) ?? "");
+        return { uuid, name: safeNameOf(x), inventoried: jaInventariados.has(uuid) };
+      }).filter((x) => x.uuid);
 
       if (safes.length === 0) {
         throw new Error(
@@ -456,9 +477,19 @@ Deno.serve(async (req) => {
           };
         }).filter((l) => l.doc_uuid);
 
+        /**
+         * Só entra o que a tabela ainda não conhece.
+         *
+         * Antes o inventário SOBRESCREVIA: documento já processado ou
+         * aguardando assinatura virava "histórico" também. Com
+         * ignoreDuplicates, inventário que rodar de novo por qualquer motivo
+         * não apaga o que o sistema já sabe — o pior caso passa a ser uma
+         * rodada inútil, não um contrato perdido.
+         */
         for (let i = 0; i < linhas.length; i += 100) {
-          await supabase.from("d4sign_documents")
-            .upsert(linhas.slice(i, i + 100), { onConflict: "doc_uuid" });
+          const { error: invErr } = await supabase.from("d4sign_documents")
+            .upsert(linhas.slice(i, i + 100), { onConflict: "doc_uuid", ignoreDuplicates: true });
+          if (invErr) throw new Error("inventário de cofre: " + invErr.message);
         }
 
         const marcados = alvos.map((c) => ({ ...c, inventoried: c.inventoried || novosUuids.has(c.uuid) }));
@@ -497,9 +528,11 @@ Deno.serve(async (req) => {
     const processSince = new Date(sinceRaw + "T00:00:00-03:00");
 
     // O que o sistema já sabe sobre esses documentos.
-    const { data: knownRows } = await supabase
+    // Se esta leitura falhar, todo contrato do histórico pareceria novo.
+    const { data: knownRows, error: knownErr } = await supabase
       .from("d4sign_documents")
       .select("doc_uuid, status, sent_at, chase_sent_at, matched_client_id");
+    if (knownErr) throw new Error("não consegui ler os documentos conhecidos: " + knownErr.message);
     const known = new Map((knownRows ?? []).map((r) => [r.doc_uuid, r]));
 
     // ------------------------------------------------- primeira rodada
@@ -573,7 +606,7 @@ Deno.serve(async (req) => {
       // Em blocos, para não estourar o limite de payload do PostgREST.
       for (let i = 0; i < inventory.length; i += 100) {
         const { error: invErr } = await supabase
-          .from("d4sign_documents").upsert(inventory.slice(i, i + 100), { onConflict: "doc_uuid" });
+          .from("d4sign_documents").upsert(inventory.slice(i, i + 100), { onConflict: "doc_uuid", ignoreDuplicates: true });
         if (invErr) throw new Error(`inventário: ${invErr.message}`);
       }
 
