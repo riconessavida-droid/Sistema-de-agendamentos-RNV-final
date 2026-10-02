@@ -29,6 +29,7 @@ export const dbToSettings = (row: any): SchedulingSettings => ({
   cancelMinNoticeHours: row.cancel_min_notice_hours ?? DEFAULT_SETTINGS.cancelMinNoticeHours,
   blockNationalHolidays: row.block_national_holidays ?? true,
   blockStateHolidays: row.block_state_holidays ?? true,
+  blockMunicipalHolidays: row.block_municipal_holidays ?? true,
   stateCode: row.state_code ?? 'SP'
 });
 
@@ -40,6 +41,7 @@ export const settingsToDb = (settings: SchedulingSettings) => ({
   cancel_min_notice_hours: settings.cancelMinNoticeHours,
   block_national_holidays: settings.blockNationalHolidays,
   block_state_holidays: settings.blockStateHolidays,
+  block_municipal_holidays: settings.blockMunicipalHolidays,
   state_code: settings.stateCode
 });
 

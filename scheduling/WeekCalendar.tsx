@@ -141,6 +141,7 @@ export function WeekCalendar({
       holidays: holidaysBetween(weekStart, weekEnd, {
         blockNational: data.settings.blockNationalHolidays,
         blockState: data.settings.blockStateHolidays,
+        blockMunicipal: data.settings.blockMunicipalHolidays,
         stateCode: data.settings.stateCode,
         overrides: data.holidayOverrides
       }),

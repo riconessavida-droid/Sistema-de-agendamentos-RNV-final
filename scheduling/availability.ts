@@ -139,6 +139,7 @@ export const availableSlots = (input: AvailabilityInput): Slot[] => {
   const holidays = holidaysBetween(today, lastDay, {
     blockNational: settings.blockNationalHolidays,
     blockState: settings.blockStateHolidays,
+    blockMunicipal: settings.blockMunicipalHolidays,
     stateCode: settings.stateCode,
     overrides: holidayOverrides
   });
@@ -184,6 +185,7 @@ export const slotStates = (
   const holidays = holidaysBetween(fromDay, toDay, {
     blockNational: settings.blockNationalHolidays,
     blockState: settings.blockStateHolidays,
+    blockMunicipal: settings.blockMunicipalHolidays,
     stateCode: settings.stateCode,
     overrides: holidayOverrides
   });

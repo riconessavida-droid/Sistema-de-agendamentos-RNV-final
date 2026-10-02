@@ -68,11 +68,33 @@ export const stateHolidays = (year: number, stateCode: string): Holiday[] => {
   return [];
 };
 
+/**
+ * Feriados municipais das cidades que fecham a agenda do Eduardo.
+ *
+ * Ele mora em Caçapava e atende a região de São José dos Campos, que fica
+ * ao lado: nos dois dias abaixo o movimento para, e antes ele precisava
+ * lembrar de bloquear a agenda à mão todo ano — era o tipo de coisa que só
+ * se descobre esquecida no próprio dia.
+ *
+ * As duas datas são FIXAS (aniversário de cada cidade), então valem para
+ * qualquer ano sem precisar de atualização. Se uma prefeitura decretar
+ * outro feriado, dá para fechar o dia pela tela de Bloqueios.
+ */
+export const MUNICIPAL_HOLIDAYS = [
+  { month: 7, day: 27, label: 'Aniversário de São José dos Campos' },
+  { month: 4, day: 14, label: 'Aniversário de Caçapava' }
+];
+
+export const municipalHolidays = (year: number): Holiday[] =>
+  MUNICIPAL_HOLIDAYS.map(h => ({ day: dayKeyOf(year, h.month, h.day), label: h.label }));
+
 export type HolidayOverride = { day: DayKey; kind: 'block' | 'allow'; label?: string };
 
 export type HolidayOptions = {
   blockNational: boolean;
   blockState: boolean;
+  /** Aniversários de São José dos Campos e Caçapava. */
+  blockMunicipal?: boolean;
   stateCode: string;
   overrides?: HolidayOverride[];
 };
@@ -96,7 +118,8 @@ export const holidaysBetween = (
   for (let year = firstYear; year <= lastYear; year++) {
     const holidays = [
       ...(options.blockNational ? nationalHolidays(year) : []),
-      ...(options.blockState ? stateHolidays(year, options.stateCode) : [])
+      ...(options.blockState ? stateHolidays(year, options.stateCode) : []),
+      ...(options.blockMunicipal ? municipalHolidays(year) : [])
     ];
     for (const holiday of holidays) {
       if (holiday.day >= fromDay && holiday.day <= toDay) {

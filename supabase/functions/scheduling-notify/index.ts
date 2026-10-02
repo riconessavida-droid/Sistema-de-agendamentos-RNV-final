@@ -1,8 +1,12 @@
 // =====================================================================
 // Edge Function: scheduling-notify
-// Roda uma vez por dia (cron das 21h BRT) e faz duas coisas:
-//   1) lembrete de véspera para cada cliente com reunião amanhã
-//   2) resumo do dia seguinte para o Eduardo
+// Dois modos, chamados por dois crons diferentes:
+//
+//   body {}                 — uma vez por dia, 21h BRT:
+//                             1) lembrete de véspera para cada cliente
+//                             2) resumo do dia seguinte para o Eduardo
+//   body {"mode":"soon"}    — de 5 em 5 minutos: avisa o Eduardo no celular
+//                             meia hora antes de cada reunião
 //
 // Não manda nada quando não há reunião no dia seguinte.
 //
@@ -124,6 +128,146 @@ async function sendEmail(
   }
 }
 
+/** Manda a notificação para todos os aparelhos autorizados. */
+async function enviarPush(payload: {
+  title: string; body: string; url?: string; tag?: string;
+}): Promise<void> {
+  await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/send-push`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`
+    },
+    body: JSON.stringify(payload)
+  });
+}
+
+/** Primeiro e segundo nome: "Livia Victorino", não o nome inteiro. */
+const shortName = (full: string): string =>
+  cleanText(full).split(" ").filter(Boolean).slice(0, 2).join(" ");
+
+/**
+ * O lembrete de meia hora antes.
+ *
+ * Roda de 5 em 5 minutos e olha quem começa daqui a 20 a 35 minutos. A
+ * janela é maior que o intervalo do cron de propósito: se uma rodada
+ * falhar, a seguinte ainda pega a reunião. Quem garante que o aviso sai
+ * UMA vez é a trava do banco — o índice único (kind, ref_key) em
+ * scheduling_notifications. Por isso o registro é gravado ANTES do envio:
+ * duas rodadas ao mesmo tempo não conseguem gravar a mesma chave, e a
+ * segunda desiste.
+ *
+ * Olha as duas agendas, como o resumo do dia: reunião marcada no eAgenda
+ * também é reunião.
+ */
+async function avisarReunioesProximas(
+  supabase: any, opcoes: { now: Date; siteUrl: string; dryRun: boolean }
+): Promise<Response> {
+  const { now, siteUrl, dryRun } = opcoes;
+
+  const MINUTOS_ANTES = 30;
+  const JANELA_ANTES = 20;
+  const JANELA_DEPOIS = 35;
+
+  const de = new Date(now.getTime() + JANELA_ANTES * 60000).toISOString();
+  const ate = new Date(now.getTime() + JANELA_DEPOIS * 60000).toISOString();
+
+  const [proprias, doEagenda] = await Promise.all([
+    supabase
+      .from("appointments")
+      .select("id, client_id, attendee_name, starts_at")
+      .eq("status", "CONFIRMED")
+      .gte("starts_at", de).lte("starts_at", ate),
+    supabase
+      .from("eagenda_bookings")
+      .select("appointment_key, attendee_name, start_datetime, event_status")
+      .gte("start_datetime", de).lte("start_datetime", ate)
+  ]);
+
+  const DESCARTADOS = new Set(["CANCELED", "NO_SHOW"]);
+
+  const reunioes = [
+    ...(proprias.data ?? []).map((a: any) => ({
+      chave: `appt:${a.id}`,
+      at: new Date(a.starts_at).getTime(),
+      clientId: a.client_id ?? null,
+      nome: a.attendee_name ?? ""
+    })),
+    ...(doEagenda.data ?? [])
+      .filter((b: any) => !DESCARTADOS.has(String(b.event_status ?? "").toUpperCase()))
+      .map((b: any) => ({
+        chave: `eagenda:${b.appointment_key}`,
+        at: new Date(b.start_datetime).getTime(),
+        clientId: null,
+        nome: b.attendee_name ?? ""
+      }))
+  ].sort((a, b) => a.at - b.at);
+
+  // O mesmo horário nas duas agendas é uma reunião só.
+  const vistos = new Set<number>();
+  const unicas = reunioes.filter(r => (vistos.has(r.at) ? false : (vistos.add(r.at), true)));
+
+  // Nome da ficha ganha do nome digitado no agendamento.
+  const clientIds = unicas.map(r => r.clientId).filter(Boolean);
+  const { data: clients } = clientIds.length
+    ? await supabase.from("clients").select("id, name").in("id", clientIds)
+    : { data: [] as any[] };
+  const nomePorId = new Map((clients ?? []).map((c: any) => [c.id as string, c.name as string]));
+
+  const avisos: any[] = [];
+
+  for (const reuniao of unicas) {
+    const quem = shortName(
+      (reuniao.clientId ? nomePorId.get(reuniao.clientId) : null) ?? reuniao.nome ?? "alguém"
+    ) || "alguém";
+    const instante = new Date(reuniao.at);
+    const hora = toTimeKey(instante);
+    const faltam = Math.max(1, Math.round((reuniao.at - now.getTime()) / 60000));
+
+    if (dryRun) {
+      avisos.push({ chave: reuniao.chave, quem, hora, faltam, dryRun: true });
+      continue;
+    }
+
+    // Grava primeiro: é a trava contra o aviso repetido.
+    const { error: jaAvisado } = await supabase
+      .from("scheduling_notifications")
+      .insert({ kind: "soon", ref_key: reuniao.chave, ref_day: toDayKey(instante), ok: true });
+
+    if (jaAvisado) {
+      avisos.push({ chave: reuniao.chave, skipped: "já avisado" });
+      continue;
+    }
+
+    try {
+      await enviarPush({
+        title: "RNV Consultoria",
+        body: `Não esquece: reunião com ${quem} às ${hora}, daqui a ${faltam} minutos.`,
+        url: siteUrl ? `/dia/${toDayKey(instante)}` : "/",
+        tag: `soon-${reuniao.chave}`
+      });
+      avisos.push({ chave: reuniao.chave, quem, hora, faltam, enviado: true });
+    } catch (e) {
+      // O registro fica: um aviso perdido é melhor que o celular tocando
+      // de 5 em 5 minutos até a reunião começar.
+      await supabase.from("scheduling_notifications")
+        .update({ ok: false, detail: String(e) })
+        .eq("kind", "soon").eq("ref_key", reuniao.chave);
+      avisos.push({ chave: reuniao.chave, erro: String(e) });
+    }
+  }
+
+  return json({
+    ok: true,
+    mode: "soon",
+    dryRun,
+    minutosAntes: MINUTOS_ANTES,
+    janela: { de, ate },
+    reunioes: unicas.length,
+    avisos
+  });
+}
+
 Deno.serve(async (req: Request) => {
   let body: any = {};
   try { body = await req.json(); } catch { /* cron chama sem corpo */ }
@@ -141,6 +285,12 @@ Deno.serve(async (req: Request) => {
   );
 
   const now = new Date();
+
+  // O cron de 5 em 5 minutos chama com {"mode":"soon"} e para por aqui.
+  if (body?.mode === "soon") {
+    return await avisarReunioesProximas(supabase, { now, siteUrl, dryRun });
+  }
+
   const tomorrow = addDays(toDayKey(now), 1);
 
   const { data: appointments, error } = await supabase
@@ -253,9 +403,6 @@ Deno.serve(async (req: Request) => {
   }
 
   // -------------------------------------------------------- resumo do dia
-  const shortName = (full: string): string =>
-    cleanText(full).split(" ").filter(Boolean).slice(0, 2).join(" ");
-
   /**
    * No WhatsApp isto era uma linha só ("08:30 Livia · 09:30 Lucas"),
    * porque a Meta rejeita parâmetro de template com quebra de linha. No

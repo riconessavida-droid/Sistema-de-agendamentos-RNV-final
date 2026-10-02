@@ -7,6 +7,7 @@ export interface SchedulingSettings {
   cancelMinNoticeHours: number;
   blockNationalHolidays: boolean;
   blockStateHolidays: boolean;
+  blockMunicipalHolidays: boolean;
   stateCode: string;
 }
 
@@ -17,6 +18,7 @@ export const DEFAULT_SETTINGS: SchedulingSettings = {
   cancelMinNoticeHours: 5,
   blockNationalHolidays: true,
   blockStateHolidays: true,
+  blockMunicipalHolidays: true,
   stateCode: 'SP'
 };
 

@@ -126,6 +126,14 @@ function holidaySet(fromDay: string, toDay: string, settings: any, overrides: an
     if (settings.block_state_holidays && settings.state_code === "SP") {
       days.push(`${year}-07-09`);
     }
+    /**
+     * Municipais: aniversário de São José dos Campos (27/07) e de Caçapava
+     * (14/04), as duas cidades onde o movimento para. Datas fixas, valem
+     * para qualquer ano. Espelho de scheduling/holidays.ts.
+     */
+    if (settings.block_municipal_holidays !== false) {
+      days.push(`${year}-07-27`, `${year}-04-14`);
+    }
     for (const day of days) {
       if (day >= fromDay && day <= toDay) result.add(day);
     }

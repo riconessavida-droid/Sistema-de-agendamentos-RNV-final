@@ -221,27 +221,32 @@ describe('bloqueios', () => {
   });
 
   test('a faixa do bloqueio vale em cada dia do período, não de ponta a ponta', () => {
-    // "de 27 a 31/07, das 14:00 às 17:00" bloqueia a tarde de cada dia —
+    // "de 03 a 07/08, das 14:00 às 17:00" bloqueia a tarde de cada dia —
     // a manhã e a noite continuam livres.
+    //
+    // A segunda usada aqui era 27/07, que virou feriado municipal (é o
+    // aniversário de São José dos Campos): o dia inteiro passou a ser
+    // bloqueado e o teste deixava de medir o que se propõe a medir.
     const blocks: ScheduleBlock[] = [
-      { id: 1, dateFrom: '2026-07-27', dateTo: '2026-07-31', timeFrom: '14:00', timeTo: '17:00', source: 'manual' }
+      { id: 1, dateFrom: '2026-08-03', dateTo: '2026-08-07', timeFrom: '14:00', timeTo: '17:00', source: 'manual' }
     ];
 
     const slots = availableSlots({ ...base, blocks });
-    const segunda = timesOn(slots, '2026-07-27');
+    const segunda = timesOn(slots, '2026-08-03');
 
     expect(segunda).toEqual(['08:30', '09:30', '18:30', '19:30', '20:30']);
   });
 
   test('horário já ocupado não é oferecido de novo', () => {
+    // 03/08 e não 27/07: o 27 virou feriado municipal.
     const slots = availableSlots({
       ...base,
       blocks: [],
-      appointments: [booking('2026-07-27', '14:00')]
+      appointments: [booking('2026-08-03', '14:00')]
     });
 
-    expect(timesOn(slots, '2026-07-27')).not.toContain('14:00');
-    expect(timesOn(slots, '2026-07-27')).toContain('15:00');
+    expect(timesOn(slots, '2026-08-03')).not.toContain('14:00');
+    expect(timesOn(slots, '2026-08-03')).toContain('15:00');
   });
 });
 
@@ -313,6 +318,17 @@ describe('feriados', () => {
       overrides: [{ day: '2026-07-09', kind: 'allow' }]
     });
     expect(liberado.has('2026-07-09')).toBe(false);
+  });
+
+  test('os municipais fecham o aniversário das duas cidades', () => {
+    const opcoes = { blockNational: true, blockState: true, blockMunicipal: true, stateCode: 'SP' };
+
+    expect(holidaysBetween('2026-07-01', '2026-07-31', opcoes).has('2026-07-27')).toBe(true);
+    expect(holidaysBetween('2027-04-01', '2027-04-30', opcoes).has('2027-04-14')).toBe(true);
+
+    // Desligado, o dia volta a ser dia útil.
+    const semMunicipal = holidaysBetween('2026-07-01', '2026-07-31', { ...opcoes, blockMunicipal: false });
+    expect(semMunicipal.has('2026-07-27')).toBe(false);
   });
 });
 
