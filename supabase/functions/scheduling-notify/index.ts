@@ -128,9 +128,12 @@ async function sendEmail(
   }
 }
 
-/** Manda a notificação para todos os aparelhos autorizados. */
+/**
+ * Manda a notificação. Sem `toEmails`, vai para todos os aparelhos
+ * autorizados; com ele, só para os aparelhos daquelas pessoas.
+ */
 async function enviarPush(payload: {
-  title: string; body: string; url?: string; tag?: string;
+  title: string; body: string; url?: string; tag?: string; toEmails?: string[];
 }): Promise<void> {
   await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/send-push`, {
     method: "POST",
@@ -164,6 +167,30 @@ async function avisarReunioesProximas(
   supabase: any, opcoes: { now: Date; siteUrl: string; dryRun: boolean }
 ): Promise<Response> {
   const { now, siteUrl, dryRun } = opcoes;
+
+  /**
+   * Este aviso é só do Eduardo.
+   *
+   * O resumo do dia e os avisos de contrato continuam chegando também no
+   * celular da assistente — ela precisa saber. Mas o lembrete de meia hora
+   * antes de cada reunião dele tocaria no telefone dela várias vezes por
+   * dia, sem ela ter o que fazer com isso.
+   *
+   * Por padrão usa o ADMIN_EMAIL, que já existe. O segredo
+   * REMINDER_PUSH_EMAILS (separado por vírgula) existe para o caso de o
+   * aparelho estar cadastrado com outro endereço — sem precisar mexer no
+   * código para descobrir isso.
+   */
+  const destinatarios = (Deno.env.get("REMINDER_PUSH_EMAILS") ?? Deno.env.get("ADMIN_EMAIL") ?? "")
+    .split(",").map(e => cleanText(e).toLowerCase()).filter(Boolean);
+
+  // Quantos aparelhos casam com esses e-mails. Vai na resposta porque
+  // "mandei para ninguém" tem de ser visível, não silencioso.
+  const { data: aparelhosRows } = await supabase
+    .from("push_subscriptions").select("user_email").is("gone_at", null);
+  const aparelhos = (aparelhosRows ?? [])
+    .filter((a: any) => destinatarios.includes(String(a.user_email ?? "").trim().toLowerCase()))
+    .length;
 
   const MINUTOS_ANTES = 30;
   const JANELA_ANTES = 20;
@@ -244,7 +271,8 @@ async function avisarReunioesProximas(
         title: "RNV Consultoria",
         body: `Não esquece: reunião com ${quem} às ${hora}, daqui a ${faltam} minutos.`,
         url: siteUrl ? `/dia/${toDayKey(instante)}` : "/",
-        tag: `soon-${reuniao.chave}`
+        tag: `soon-${reuniao.chave}`,
+        toEmails: destinatarios
       });
       avisos.push({ chave: reuniao.chave, quem, hora, faltam, enviado: true });
     } catch (e) {
@@ -264,6 +292,10 @@ async function avisarReunioesProximas(
     minutosAntes: MINUTOS_ANTES,
     janela: { de, ate },
     reunioes: unicas.length,
+    // Sem aparelho casando, o aviso não chega a ninguém — e isso precisa
+    // aparecer aqui, senão o silêncio parece "não havia reunião".
+    aparelhos,
+    ...(aparelhos === 0 ? { alerta: "nenhum aparelho casa com os e-mails de destino" } : {}),
     avisos
   });
 }

@@ -325,6 +325,7 @@ describe('feriados', () => {
 
     expect(holidaysBetween('2026-07-01', '2026-07-31', opcoes).has('2026-07-27')).toBe(true);
     expect(holidaysBetween('2027-04-01', '2027-04-30', opcoes).has('2027-04-14')).toBe(true);
+    expect(holidaysBetween('2027-03-01', '2027-03-31', opcoes).has('2027-03-19')).toBe(true);
 
     // Desligado, o dia volta a ser dia útil.
     const semMunicipal = holidaysBetween('2026-07-01', '2026-07-31', { ...opcoes, blockMunicipal: false });

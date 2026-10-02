@@ -81,6 +81,7 @@ export const stateHolidays = (year: number, stateCode: string): Holiday[] => {
  * outro feriado, dá para fechar o dia pela tela de Bloqueios.
  */
 export const MUNICIPAL_HOLIDAYS = [
+  { month: 3, day: 19, label: 'São José (padroeiro de São José dos Campos)' },
   { month: 7, day: 27, label: 'Aniversário de São José dos Campos' },
   { month: 4, day: 14, label: 'Aniversário de Caçapava' }
 ];

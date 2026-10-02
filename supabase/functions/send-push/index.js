@@ -77,14 +77,43 @@ Deno.serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"),
   );
 
-  const { data: inscritos, error } = await supabase
+  const { data: todos, error } = await supabase
     .from("push_subscriptions")
-    .select("id, endpoint, p256dh, auth, label")
+    .select("id, endpoint, p256dh, auth, label, user_email")
     .is("gone_at", null);
 
   if (error) return json({ ok: false, error: error.message }, 500);
-  if (!inscritos || inscritos.length === 0) {
+  if (!todos || todos.length === 0) {
     return json({ ok: true, enviados: 0, note: "nenhum aparelho autorizado ainda" });
+  }
+
+  /**
+   * "toEmails" escolhe para QUEM vai o aviso.
+   *
+   * Sem ele, vai para todos os aparelhos — é assim que o resumo do dia, o
+   * contrato assinado e o novo agendamento chegam ao Eduardo e à Giane.
+   * Com ele, só quem está na lista recebe: o lembrete de meia hora antes
+   * de cada reunião é do Eduardo, e tocar no celular da Giane a cada
+   * reunião dele seria barulho.
+   *
+   * A comparação ignora maiúsculas: o e-mail do aparelho foi gravado do
+   * jeito que o navegador tinha, e o da lista vem de um segredo digitado
+   * à mão.
+   */
+  const paraQuem = Array.isArray(body?.toEmails)
+    ? body.toEmails.map((e) => String(e ?? "").trim().toLowerCase()).filter(Boolean)
+    : [];
+
+  const inscritos = paraQuem.length
+    ? todos.filter((i) => paraQuem.includes(String(i.user_email ?? "").trim().toLowerCase()))
+    : todos;
+
+  if (inscritos.length === 0) {
+    // Não cai de volta para "manda para todos": seria o oposto do pedido.
+    return json({
+      ok: true, enviados: 0, encontrados: 0,
+      note: "nenhum aparelho dos destinatários pedidos"
+    });
   }
 
   let enviados = 0;
